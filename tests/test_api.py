@@ -13,7 +13,8 @@ from casahome.models import CreateTodoBody, MemberSimpleHomeStatus
 from .conftest import HOME_ID, FakeServer, load
 
 pytestmark = pytest.mark.usefixtures("token_ok")
-H = f"/protected/member/home/{HOME_ID}"
+H = f"/protected/home/{HOME_ID}"
+MH = f"/protected/member/home/{HOME_ID}"
 
 
 async def test_bootstrap(server: FakeServer, api: CasaApi) -> None:
@@ -85,7 +86,7 @@ MINIMAL: dict[str, dict[str, Any]] = {
 }
 
 CASES: list[tuple[str, tuple[Any, ...], str, str]] = [
-    ("home_details", (HOME_ID,), "GET", f"{H}/inventory/v3"),
+    ("home_details", (HOME_ID,), "GET", f"{MH}/inventory/v3"),
     ("badge_counts", (HOME_ID,), "GET", f"{H}/badge_counts"),
     ("weather", (HOME_ID,), "GET", f"{H}/weather"),
     ("requests_tab", (HOME_ID,), "GET", f"{H}/requests_tab"),

@@ -55,7 +55,7 @@ def _parse(model: type[M], data: Any) -> M:
 
 
 _UNVERIFIED_NOTE = (
-    "UNVERIFIED: path from static analysis, HTTP method guessed. Not yet observed live."
+    "UNVERIFIED: path and HTTP method from static disassembly (LIKELY). Not yet observed live."
 )
 
 
@@ -92,6 +92,12 @@ def _epoch(value: datetime | int) -> int:
 
 
 def _home(home_id: str) -> str:
+    """Base for most per-home endpoints (disassembly, 2026-10-10)."""
+    return f"/protected/home/{home_id}"
+
+
+def _member_home(home_id: str) -> str:
+    """Base for inventory, entity, room, and story endpoints only."""
     return f"/protected/member/home/{home_id}"
 
 
@@ -166,7 +172,7 @@ class CasaApi:
     @unverified
     async def home_details(self, home_id: str) -> HomeDetailsResponse:
         """Stories, rooms, and inventory entities."""
-        data = await self.client.get(f"{_home(home_id)}/inventory/v3")
+        data = await self.client.get(f"{_member_home(home_id)}/inventory/v3")
         return _parse(HomeDetailsResponse, data)
 
     @unverified
@@ -196,7 +202,8 @@ class CasaApi:
     async def calendar(
         self, home_id: str, start: datetime | int, end: datetime | int
     ) -> VisitsCalendarResponse:
-        """Visit calendar between two bounds. Query param names guessed.
+        """Visit calendar between two bounds. ``end_time`` seen in the binary,
+        ``start_time`` inferred.
 
         Accepts aware datetimes or epoch seconds. Naive datetimes are rejected,
         since guessing a zone silently shifts the window.

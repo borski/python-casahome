@@ -63,7 +63,7 @@ op run --env-file=.env -- uv run examples/bootstrap.py
 | Label | Meaning |
 |-------|---------|
 | VERIFIED | Seen in real traffic. Path, method, and body known. |
-| UNVERIFIED | Path and schema recovered from the app binary. HTTP method and query params are guesses. May 404 or 405. |
+| UNVERIFIED | Path, HTTP method, and schema recovered from the app binary by disassembly (method confidence LIKELY: the method accessor and path are built in the same function). Query params and response wrappers are still partly inferred. Not yet seen in live traffic. |
 
 `casahome.is_unverified(api.some_method)` tells you at runtime.
 
