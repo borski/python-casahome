@@ -55,7 +55,8 @@ def _parse(model: type[M], data: Any) -> M:
 
 
 _UNVERIFIED_NOTE = (
-    "UNVERIFIED: path and HTTP method from static disassembly (LIKELY). Not yet observed live."
+    "UNVERIFIED: inferred path, HTTP method supported by static disassembly (LIKELY). "
+    "Not yet observed live."
 )
 
 
@@ -202,11 +203,14 @@ class CasaApi:
     async def calendar(
         self, home_id: str, start: datetime | int, end: datetime | int
     ) -> VisitsCalendarResponse:
-        """Visit calendar between two bounds. ``end_time`` seen in the binary,
-        ``start_time`` inferred.
+        """Visit calendar between two bounds.
+
+        Static disassembly shows ``start_time`` and ``end_time`` query items
+        containing stringified Swift integers. Their time units aren't verified.
 
         Accepts aware datetimes or epoch seconds. Naive datetimes are rejected,
-        since guessing a zone silently shifts the window.
+        since guessing a zone silently shifts the window. Datetime conversion
+        assumes Unix seconds pending traffic confirmation.
         """
         data = await self.client.get(
             f"{_home(home_id)}/calendar",

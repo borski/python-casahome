@@ -62,15 +62,15 @@ op run --env-file=.env -- uv run examples/bootstrap.py
 
 | Label | Meaning |
 |-------|---------|
-| VERIFIED | Seen in real traffic. Path, method, and body known. |
-| UNVERIFIED | Path, HTTP method, and schema recovered from the app binary by disassembly (method confidence LIKELY: the method accessor and path are built in the same function). Query params and response wrappers are still partly inferred. Not yet seen in live traffic. |
+| VERIFIED | Path and method seen in real traffic. Body coverage is stated separately below. |
+| UNVERIFIED | Inferred path and model schema from static analysis. Method confidence is LIKELY based on method-accessor calls at request sites. Same-function evidence doesn't establish a complete wire contract. Not yet seen in live traffic. |
 
 `casahome.is_unverified(api.some_method)` tells you at runtime.
 
 | Method | Status |
 |--------|--------|
 | `bootstrap` | VERIFIED |
-| `onboarding_details` | VERIFIED |
+| `onboarding_details` | VERIFIED path and method only. Captured response was 304, body shape unknown. |
 | `home_details` | UNVERIFIED |
 | `badge_counts` | UNVERIFIED |
 | `weather` | UNVERIFIED |
@@ -82,6 +82,10 @@ op run --env-file=.env -- uv run examples/bootstrap.py
 | `mail_items` | UNVERIFIED |
 | `packages` | UNVERIFIED |
 | `create_todo` | UNVERIFIED, write |
+
+Calendar disassembly shows `start_time` and `end_time` passed as query items
+with stringified integer values. Timestamp units, range semantics, and server
+requirements still need traffic confirmation. Datetime conversion assumes Unix seconds.
 
 Billing, membership, payments, and agreements are out of scope on purpose.
 
