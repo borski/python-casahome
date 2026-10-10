@@ -1,0 +1,9 @@
+{
+  "access_token": "fake.access.token",
+  "expires_in": "3600",
+  "token_type": "Bearer",
+  "refresh_token": "fake-rotated-refresh-token",
+  "id_token": "fake.id.token",
+  "user_id": "fakeFirebaseUid0000000000000",
+  "project_id": "312296672090"
+}

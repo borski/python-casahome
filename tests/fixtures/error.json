@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "not_found",
+    "displayTitle": "Not found",
+    "displayMessage": "We couldn't find that.",
+    "requestId": "req_fake_000000"
+  }
+}
