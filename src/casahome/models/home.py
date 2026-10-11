@@ -1,12 +1,16 @@
-"""Home inventory and weather models (UNVERIFIED endpoints)."""
+"""Home inventory and weather models.
+
+Inventory entity fields are live-verified against ``inventory/v3`` (2026-10).
+"""
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from pydantic import Field
 
-from ._base import CasaModel
+from ._base import CasaModel, epoch_to_dt
 from .enums import WeatherConditionField
 
 
@@ -51,8 +55,67 @@ class HomeDetails(CasaModel):
     stories: list[HomeStory] = Field(default_factory=list)
 
 
+PropertyValue = str | int | float | bool | None
+"""Scalar value carried by entity and catalog model properties (live-verified)."""
+
+
+class EntityProperty(SimpleEntityProp):
+    """A typed property on an inventory entity, e.g. ``serial_number``.
+
+    Same wire shape as :class:`SimpleEntityProp`, but the value is narrowed to
+    the scalar types observed live on ``inventory/v3``.
+    """
+
+    value: PropertyValue = None
+
+
+class EntityMake(CasaModel):
+    id: str
+    name: str
+
+
+class ModelProperty(CasaModel):
+    """A catalog property on a make/model, e.g. key ``summary``."""
+
+    id: str
+    key: str
+    caption: str | None = None
+    value: PropertyValue = None
+    data_type: str | None = None
+    format: str | None = None
+    symbol_name: str | None = None
+
+
+class EntityModel(CasaModel):
+    id: str
+    name: str
+    properties: list[ModelProperty] = Field(default_factory=list)
+
+    def property_value(self, key: str) -> PropertyValue:
+        """Return the value of the first catalog property with ``key``, else None."""
+        return next((p.value for p in self.properties if p.key == key), None)
+
+
+class EntityIdentity(CasaModel):
+    """How confidently Casa has identified the make and model."""
+
+    state: str | None = None
+    unverified_make: str | None = None
+    unverified_model: str | None = None
+    candidates: list[Any] = Field(default_factory=list)
+
+
+class EntityImage(CasaModel):
+    """Image metadata. URL and cache-key fields ride along in ``model_extra``."""
+
+    id: str
+    name: str | None = None
+    role: str | None = None
+    is_hero: bool = False
+
+
 class SimpleEntity(CasaModel):
-    """An inventory item (appliance, fixture, etc). Nested catalog types left loose."""
+    """An inventory item (appliance, fixture, etc.) from ``inventory/v3``."""
 
     id: str
     category_id: str
@@ -61,17 +124,40 @@ class SimpleEntity(CasaModel):
     type_id: str | None = None
     type: str | None = None
     type_symbol_name: str | None = None
+    created_at: int | None = None
+    inventoried_by: str | None = None
+    failure_reason: str | None = None
+    failure_item_label: str | None = None
+    issues: list[Any] = Field(default_factory=list)
     rooms: list[str] = Field(default_factory=list)
     stories: list[str] = Field(default_factory=list)
-    images: list[Any] = Field(default_factory=list)
+    images: list[EntityImage] = Field(default_factory=list)
     manuals: list[Any] = Field(default_factory=list)
     thumbnail_url: str | None = None
     thumbnail_url_cache_key: str | None = None
-    make: Any | None = None
-    model: Any | None = None
-    entity_properties: list[SimpleEntityProp] = Field(default_factory=list)
+    catalog_make_requirement: str | None = None
+    catalog_model_requirement: str | None = None
+    catalog_model_required: bool | None = None
+    make: EntityMake | None = None
+    model: EntityModel | None = None
+    identity: EntityIdentity | None = None
+    entity_properties: list[EntityProperty] = Field(default_factory=list)
     associated_entity_ids: list[str] | None = None
     is_removable: bool = False
+    is_retypable: bool | None = None
+    removal_blocked_reason: str | None = None
+    paint_match: Any | None = None
+
+    @property
+    def created_at_dt(self) -> datetime | None:
+        return epoch_to_dt(self.created_at)
+
+    def property_value(self, key: str) -> PropertyValue:
+        """Return the value of the first entity property with ``key``, else None.
+
+        Example: ``entity.property_value("serial_number")``.
+        """
+        return next((p.value for p in self.entity_properties if p.key == key), None)
 
 
 class HomeDetailsResponse(CasaModel):

@@ -133,3 +133,38 @@ async def test_concurrent_401s_refresh_once(server: FakeServer, client: CasaClie
     assert results == [{"ok": True}] * 5
     # One initial refresh plus exactly one after the burst of 401s.
     assert len(server.calls("POST", TOKEN_PATH)) == 2
+
+
+async def test_writes_raise_on_401_without_retry(server: FakeServer, client: CasaClient) -> None:
+    server.add("POST", PATH, status=401)
+    server.add("POST", PATH, payload={"ok": True})
+    with pytest.raises(CasaAuthError):
+        await client.post(PATH, json={})
+    assert len(server.calls("POST", PATH)) == 1
+
+
+async def test_explicit_retry_on_401_opt_in_for_post(
+    server: FakeServer, client: CasaClient
+) -> None:
+    server.add("POST", PATH, status=401)
+    server.add("POST", PATH, payload={"ok": True})
+    assert await client.post(PATH, json={}, retry_on_401=True) == {"ok": True}
+    assert len(server.calls("POST", PATH)) == 2
+
+
+async def test_get_can_opt_out_of_401_retry(server: FakeServer, client: CasaClient) -> None:
+    server.add("GET", PATH, status=401)
+    server.add("GET", PATH, payload={"ok": True})
+    with pytest.raises(CasaAuthError):
+        await client.request("GET", PATH, retry_on_401=False)
+    assert len(server.calls("GET", PATH)) == 1
+
+
+async def test_write_non_envelope_error_has_no_raw_body(
+    server: FakeServer, client: CasaClient
+) -> None:
+    server.add("PATCH", PATH, status=502, body="<html>echoed private text</html>")
+    with pytest.raises(CasaApiError) as exc:
+        await client.patch(PATH, json={})
+    assert exc.value.display_message == ""
+    assert "echoed" not in str(exc.value)

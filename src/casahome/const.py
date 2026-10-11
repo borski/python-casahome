@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 FOUNDATION_BASE_URL = "https://foundation.platform.casa"
-UTILITY_CONNECT_BASE_URL = "https://utility-connect.platform.casa"  # not used in v0.1
+UTILITY_CONNECT_BASE_URL = "https://utility-connect.platform.casa"  # not used yet
 
 # Firebase project the app authenticates against. The API key is a public client
 # identifier shipped inside the iOS bundle (GoogleService-Info.plist), not a secret.
@@ -19,6 +19,11 @@ CASA_APP = "member-ios"
 # The bootstrap body spells it with an underscore. Header uses a dash. Both VERIFIED.
 CASA_DEVICE_APP = "member_ios"
 CASA_APP_VERSION = "698"
+# Same build as an integer. The app sends it as the feed's ``app_build`` and
+# release notes' ``currentBuild`` query values (CFBundleVersion parsed as Int32).
+CASA_APP_BUILD = int(CASA_APP_VERSION)
+# The app's Int32 ceiling, also its fallback when the bundle build is missing.
+MAX_APP_BUILD = 2_147_483_647
 APP_MARKETING_VERSION = "2026.38.2"
 USER_AGENT = (
     f"Casa/{APP_MARKETING_VERSION} ({FIREBASE_BUNDLE_ID}; build:{CASA_APP_VERSION}; "

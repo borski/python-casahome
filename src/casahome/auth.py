@@ -2,7 +2,7 @@
 
 Casa signs members in with Firebase Phone Auth. SMS sign-in can't be reproduced
 off-device (Firebase requires APNs app verification), so this library starts
-from a refresh token captured from the app and exchanges it for short-lived
+from a refresh token taken from the member's own app session and exchanges it for short-lived
 ID tokens via the standard Firebase secure token endpoint.
 """
 

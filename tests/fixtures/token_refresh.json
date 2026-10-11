@@ -5,5 +5,5 @@
   "refresh_token": "fake-rotated-refresh-token",
   "id_token": "fake.id.token",
   "user_id": "fakeFirebaseUid0000000000000",
-  "project_id": "312296672090"
+  "project_id": "fake-project"
 }

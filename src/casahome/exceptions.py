@@ -23,6 +23,15 @@ class CasaResponseError(CasaError):
     """
 
 
+class CasaRequestError(CasaError, ValueError):
+    """A write body failed validation before any I/O.
+
+    The message carries only the model name and error count. Pydantic's own
+    error would echo the rejected input, which can be private message text.
+    Subclasses ``ValueError`` so existing ``except ValueError`` callers still work.
+    """
+
+
 class CasaApiError(CasaError):
     """Casa returned a non-success response."""
 

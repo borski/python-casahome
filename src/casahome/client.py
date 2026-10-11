@@ -65,13 +65,32 @@ class CasaClient:
         *,
         json: Any | None = None,
         params: Mapping[str, str] | None = None,
+        retry_on_401: bool | None = None,
     ) -> Any:
-        """Send a request and return decoded JSON (or None for empty bodies)."""
+        """Send a request and return decoded JSON (or None for empty bodies).
+
+        ``retry_on_401`` defaults to True for GET only. Writes (POST, PATCH,
+        DELETE) default to a single attempt: a 401 after the server may have
+        acted would turn a retry into a duplicate write. Non-retrying requests
+        start with a force-refreshed ID token instead, so an expiring token
+        can't trigger the 401 in the first place. A 401 still invalidates the
+        rejected token and raises ``CasaAuthError``.
+
+        Non-GET error bodies never fall back to raw response text. Only the
+        structured error envelope fields are kept, since a write's error body
+        could echo the private content that was sent.
+        """
+        retry = method == "GET" if retry_on_401 is None else retry_on_401
+        scrub = method != "GET"
         _LOGGER.debug("%s %s", method, path)
+        if not retry:
+            await self.auth.refresh()
         status, body, used = await self._send(method, path, json=json, params=params)
         if status == 401:
-            _LOGGER.debug("401 on %s %s, refreshing token and retrying once", method, path)
             self.auth.invalidate(used)
+            if not retry:
+                raise CasaAuthError(f"Casa rejected the ID token (HTTP 401) on {method}")
+            _LOGGER.debug("401 on %s %s, refreshing token and retrying once", method, path)
             status, body, _ = await self._send(method, path, json=json, params=params)
             if status == 401:
                 raise CasaAuthError("Casa rejected the refreshed token (HTTP 401)")
@@ -81,9 +100,11 @@ class CasaClient:
         if 200 <= status < 300:
             try:
                 return jsonlib.loads(body)
-            except ValueError as err:
-                raise CasaApiError(status, "invalid_json", display_message=body[:200]) from err
-        raise _api_error(status, body)
+            except ValueError:
+                display = "" if scrub else body[:200]
+            # Raised outside the handler so the decode error's context is dropped.
+            raise CasaApiError(status, "invalid_json", display_message=display)
+        raise _api_error(status, body, raw_fallback=not scrub)
 
     async def _send(
         self,
@@ -117,17 +138,17 @@ class CasaClient:
     async def get(self, path: str, *, params: Mapping[str, str] | None = None) -> Any:
         return await self.request("GET", path, params=params)
 
-    async def post(self, path: str, *, json: Any | None = None) -> Any:
-        return await self.request("POST", path, json=json)
+    async def post(self, path: str, *, json: Any | None = None, retry_on_401: bool = False) -> Any:
+        return await self.request("POST", path, json=json, retry_on_401=retry_on_401)
 
     async def patch(self, path: str, *, json: Any | None = None) -> Any:
-        return await self.request("PATCH", path, json=json)
+        return await self.request("PATCH", path, json=json, retry_on_401=False)
 
     async def delete(self, path: str) -> Any:
-        return await self.request("DELETE", path)
+        return await self.request("DELETE", path, retry_on_401=False)
 
 
-def _api_error(status: int, body: str) -> CasaApiError:
+def _api_error(status: int, body: str, *, raw_fallback: bool = True) -> CasaApiError:
     try:
         payload = jsonlib.loads(body)
     except ValueError:
@@ -144,4 +165,4 @@ def _api_error(status: int, body: str) -> CasaApiError:
     if isinstance(payload, dict) and isinstance(payload.get("error"), str):
         # Second observed shape: {"error": "Invalid user device info"}
         return CasaApiError(status, "unknown", display_message=payload["error"])
-    return CasaApiError(status, "unknown", display_message=body[:500])
+    return CasaApiError(status, "unknown", display_message=body[:500] if raw_fallback else "")

@@ -8,10 +8,11 @@ from .exceptions import (
     CasaAuthError,
     CasaConnectionError,
     CasaError,
+    CasaRequestError,
     CasaResponseError,
 )
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 __all__ = [
     "CasaApi",
@@ -20,6 +21,7 @@ __all__ = [
     "CasaClient",
     "CasaConnectionError",
     "CasaError",
+    "CasaRequestError",
     "CasaResponseError",
     "FirebaseAuth",
     "TokenResponse",
