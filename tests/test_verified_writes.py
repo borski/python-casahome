@@ -516,13 +516,10 @@ def test_clear_rating_stays_unverified() -> None:
 
 
 def test_still_unverified_writes_unchanged() -> None:
-    for name in (
-        "send_request_message",
-        "create_todo",
-        "create_todo_result",
-        "update_entity_properties",
-    ):
-        assert is_unverified(getattr(CasaApi, name))
+    assert is_unverified(CasaApi.update_entity_properties)
+    for name in ("create_todo", "create_todo_result", "send_request_message"):
+        assert not is_unverified(getattr(CasaApi, name))
+        assert (getattr(CasaApi, name).__doc__ or "").startswith("VERIFIED")
 
 
 # Casa AI -------------------------------------------------------------------

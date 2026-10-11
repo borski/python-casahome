@@ -158,12 +158,13 @@ def operation(name: str) -> tuple[str, str, dict[str, Any]]:
 
 
 @pytest.mark.parametrize("name", WRITE_METHODS)
-def test_write_methods_marked_unverified(name: str) -> None:
+def test_write_methods_evidence_markers(name: str) -> None:
     method = getattr(CasaApi, name)
     assert inspect.iscoroutinefunction(method)
-    assert is_unverified(method)
-    assert (method.__doc__ or "").startswith("UNVERIFIED")
-    assert "static" in (method.__doc__ or "").lower()
+    verified = name in {"create_todo", "create_todo_result", "send_request_message"}
+    assert is_unverified(method) is not verified
+    assert (method.__doc__ or "").startswith("VERIFIED" if verified else "UNVERIFIED")
+    assert ("observed" if verified else "static") in (method.__doc__ or "").lower()
 
 
 @pytest.mark.parametrize(

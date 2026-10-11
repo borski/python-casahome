@@ -137,6 +137,17 @@ class UpdateAccessPreferencesRequest(_WriteModel):
 # Documents ---------------------------------------------------------------
 
 
+class RespondToDocumentStructureSuggestionRequest(_WriteModel):
+    """Only accepted was observed. The current-value race guard is required.
+
+    No accept or dismissal decision variants are inferred. Explicit empty
+    expected_values remains an empty list, not an omitted guard.
+    """
+
+    decision: Literal["accepted"]
+    expected_values: list[_Text]
+
+
 class DocumentUploadFile(_WriteModel):
     size_bytes: Annotated[StrictInt, Field(gt=0)]
     mimetype: _Token

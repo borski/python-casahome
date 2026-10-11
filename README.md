@@ -7,12 +7,14 @@ Unofficial. Not affiliated with or endorsed by Casa.
 ## Status
 
 Version 0.3.0, alpha.
+This source tree is local and unpublished. The PyPI package can be older.
 
 - Most reads have been confirmed against live traffic.
 - Version 0.3.0 adds writes whose method, path, request body and response were
   confirmed against live app traffic: moving inventory, Casa AI messages and
-  ratings, to-do questions and hand-off, Autopilot, notification and access
-  settings, mailbox claim, and document upload.
+  ratings, request messages, plain-text to-do creation and deletion, to-do
+  questions and hand-off, name-only entity model publishing, Autopilot,
+  notification and access settings, mailbox claim, and document upload.
 - A few older writes remain unverified. Treat them as experimental.
 - Endpoint shapes were inferred from the iOS app and confirmed against live
   traffic where marked. Casa can change its private API at any time.
@@ -25,10 +27,10 @@ Install from PyPI:
 pip install python-casahome
 ```
 
-Alternatively, install from the tagged GitHub source:
+For this local source checkout:
 
 ```
-pip install "python-casahome @ git+https://github.com/borski/python-casahome@v0.3.0"
+uv sync --locked
 ```
 
 Requires Python 3.11 or newer.
@@ -145,7 +147,9 @@ elements inside lists. All live confirmation dates from 2026-10.
 | `documents` | yes | App sends `limit=30&sort=uploaded`. `q` and `document_type` untested. |
 | `document_details` | yes | |
 | `document_thumbnail` | yes | Signed preview URLs. Never fetched by the library. |
-| `document_structure_suggestions` | partial | Seen empty. |
+| `document_file_metadata` | yes | Signed file URL and integer expiry only. No download. |
+| `document_suggestions` | yes | Populated suggestions and citations. `view=all` observed. Other values and filtering semantics unverified. Matches empty, cursor null. |
+| `document_structure_suggestions` | yes | Populated entity/definition IDs, labels, values, response times and citations. |
 | `request_details` | yes | |
 | `request_purchases` | partial | Envelope seen. Item lists empty. |
 | `membership_info` | yes | Active membership. A home without one returns 404. |
@@ -171,7 +175,6 @@ elements inside lists. All live confirmation dates from 2026-10.
 | `referral_code` | partial | `display` and `referred_homes` stay opaque JSON. |
 | `membership_savings` | no | Returns 404 even with an active membership. |
 | `availability_request_details` | no | |
-| `document_suggestions` | no | |
 | `task_details` | no | |
 | `vendor_visit_details` | no | |
 | `vendor_visit_autopilot_plan` | no | |
@@ -188,12 +191,17 @@ traffic and the library sends the same body.
 | Method | Live-confirmed | Notes |
 |---|---|---|
 | `move_entity_to_room` | yes | Replaces the item's room. |
+| `save_and_publish_entity`, `update_entity_model` | yes | Only `model.name` and empty `props`. No make or model-ID variants. |
 | `send_ai_message` | yes | Sends an `Idempotency-Key` and returns it. Reply arrives on the event stream. |
 | `rate_ai_message` | yes | `good` or `bad`. |
 | `answer_todo_question` | yes | Answers seen. The skip body is unverified. |
 | `submit_todo_question_round` | yes | |
 | `respond_to_suggested_todo` | yes | Only `accept` seen. |
 | `materialize_todo`, `send_todo_to_concierge` | yes | Only the `concierge` destination seen. |
+| `create_todo_result`, `create_todo` | yes | Plain text only. Attachments and support-confirmation true unverified. |
+| `delete_todo` | yes | Bodyless DELETE, HTTP 204. |
+| `send_request_message` | yes | Member role and text, HTTP 201 message envelope. Attachments unverified. |
+| `respond_to_document_structure_suggestion` | yes | Only `accepted`. Requires explicit `expected_values`. HTTP 200 with `saved: true`. |
 | `update_autopilot_plan` | yes | |
 | `update_notification_settings` | yes | Only the `push` channel seen. |
 | `update_access_preferences` | yes | All four keys always sent. |
@@ -203,9 +211,6 @@ traffic and the library sends the same body.
 | `create_document` | yes | Upload step 3. |
 | `upload_document` | yes | All three steps, after checking the file against `document_types`. |
 | `clear_ai_message_rating` | no | Path from the app only. |
-| `create_todo_result` | no | |
-| `create_todo` | no | |
-| `send_request_message` | no | |
 | `update_entity_properties` | no | |
 
 ## Models
@@ -246,6 +251,25 @@ backend. Nothing is sent until you await a write method.
 - `create_todo_result` returns the full envelope, including
   `needs_support_confirmation`. `create_todo` is the older helper that returns
   just the todo.
+- `save_and_publish_entity` requires `SaveAndPublishEntityRequest` with
+  `model=EntityModelName(name=...)` and `props=[]`. The simpler
+  `update_entity_model(home_id, entity_id, model_name)` sends that same body.
+  Both return `SaveAndPublishEntityResponse`, including make, model and identity.
+  Nonempty props, make selection and model-ID inputs aren't supported here.
+  Empty-name and clear semantics remain unverified. The older property PATCH
+  is still unverified.
+- `document_suggestions(..., view=None)` omits the query by default. Supplied
+  view strings are forwarded unchanged as query values. `view="all"` was
+  observed. Other values and filtering semantics aren't verified.
+  A null `next_cursor` was observed,
+  but no cursor input is added without an observed query contract.
+- `respond_to_document_structure_suggestion(home_id, document_id, suggestion_id,
+  expected_values, decision="accepted")` sends only the confirmed response body.
+  `expected_values` is required. Pass the suggestion's `current_values`, including
+  an explicit empty list when appropriate. There isn't a default race guard or
+  automatic refresh. Server mismatch handling remains unverified.
+  `"accept"` and dismissal decisions are rejected. `SavedResponse.saved` requires
+  a strict Boolean. No document PATCH is added.
 
 ### Document upload
 
@@ -300,14 +324,14 @@ retries the GET once.
 
 ```
 uv sync
-uv run pytest -q
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src tests
+uv run --locked pytest -q
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked mypy src tests
 ```
 
-Tests use synthetic data and a loopback test server. They make no network calls
-and need no credentials.
+Tests use synthetic data and a loopback test server. They make no live service
+calls and need no credentials.
 
 ## License
 

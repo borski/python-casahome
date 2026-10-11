@@ -78,6 +78,7 @@ from casahome.models.catalogs import (
 )
 from casahome.models.documents import (
     DocumentDetailsResponse,
+    DocumentFileMetadataResponse,
     DocumentsResponse,
     DocumentStructureSuggestionsResponse,
     DocumentSuggestionsResponse,
@@ -901,25 +902,50 @@ class CasaApi(VerifiedWritesMixin):
         path = f"{_safe_home(home_id)}/documents/{_safe_id(document_id)}/thumbnail"
         return _parse(DocumentThumbnailResponse, await self.client.get(path))
 
-    @unverified
-    async def document_suggestions(
+    async def document_file_metadata(
         self, home_id: str, document_id: str
-    ) -> DocumentSuggestionsResponse:
-        """Existing suggestions for one document.
+    ) -> DocumentFileMetadataResponse:
+        """VERIFIED. GET file metadata, HTTP 200 with url and expires_at integer.
 
+        Returns the signed URL only. Never downloads the file or follows the URL.
+        The URL is a short-lived credential. Don't log or persist it.
+        """
+        path = f"{_safe_home(home_id)}/documents/{_safe_id(document_id)}/file"
+        return _parse(DocumentFileMetadataResponse, await self.client.get(path))
+
+    async def document_suggestions(
+        self, home_id: str, document_id: str, *, view: str | None = None
+    ) -> DocumentSuggestionsResponse:
+        """VERIFIED (live GET, 2026-10), view query key and populated suggestion fields.
+
+        The view key and value "all" were observed. Other values and filtering
+        semantics remain UNVERIFIED. Omitted when None. Supplied strings are
+        preserved as encoded query values, never path segments. Empty matches
+        and null next_cursor were observed.
+        Populated matches and cursor behavior remain UNVERIFIED.
         Reads existing suggestions, including sensitive text/citations. Doesn't
         analyze the document, create work, or accept/dismiss suggestions.
         """
         path = f"{_safe_home(home_id)}/documents/{_safe_id(document_id)}/suggestions"
-        return _parse(DocumentSuggestionsResponse, await self.client.get(path))
+        params: dict[str, str] = {}
+        if view is not None:
+            if (
+                not isinstance(view, str)
+                or len(view) > 2048
+                or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in view)
+            ):
+                raise ValueError("view must be a string of at most 2048 chars without controls")
+            params["view"] = view
+        return _parse(DocumentSuggestionsResponse, await self.client.get(path, params=params))
 
     async def document_structure_suggestions(
         self, home_id: str, document_id: str
     ) -> DocumentStructureSuggestionsResponse:
-        """VERIFIED (live GET, 2026-10) envelope, observed ``{"suggestions": []}``.
+        """VERIFIED (live GET, 2026-10), populated structure suggestion fields.
 
-        Populated item fields are static and UNVERIFIED. Reads only, never
-        responds or edits inventory.
+        Includes entity_id, definition_id, current_values, labels, state,
+        changed_since_analysis, responded_at and citations. States pending and
+        accepted observed. Reads only, never responds or edits inventory.
         """
         path = f"{_safe_home(home_id)}/documents/{_safe_id(document_id)}/structure_suggestions"
         return _parse(DocumentStructureSuggestionsResponse, await self.client.get(path))
@@ -1034,12 +1060,14 @@ class CasaApi(VerifiedWritesMixin):
         path = f"{_safe_home(home_id)}/requests/{_safe_id(request_id)}"
         return _parse(RequestDetails, await self.client.get(path))
 
-    # UNVERIFIED writes ------------------------------------------------------
+    # Writes with per-variant confidence --------------------------------------
 
-    @unverified
     async def create_todo(self, home_id: str, body: CreateTodoBody) -> TodoDetail:
-        """Legacy convenience return, accepting bare TodoDetail or a todo envelope.
+        """VERIFIED for plain text. Legacy return of TodoDetail from the envelope.
 
+        POST with content only answered HTTP 201 with a todo envelope and
+        needs_support_confirmation=false. Attachments and support=true remain
+        UNVERIFIED. Bare-response acceptance is legacy compatibility, not observed.
         This intentionally discards needs_support_confirmation if supplied and
         doesn't require it. Use create_todo_result to retain and strictly validate
         the full envelope. Delegating to that method would
@@ -1051,11 +1079,12 @@ class CasaApi(VerifiedWritesMixin):
             data = data["todo"]
         return _parse(TodoDetail, data)
 
-    @unverified
     async def create_todo_result(self, home_id: str, body: CreateTodoBody) -> CreateTodoResponse:
-        """Create a to-do and retain the required support-confirmation flag.
+        """VERIFIED for plain text. Retain the required support-confirmation flag.
 
-        Wire format inferred statically from the app (LIKELY). Backend behavior UNVERIFIED.
+        Observed POST with content only answered HTTP 201 with todo and
+        needs_support_confirmation=false. Attachments and support=true are
+        UNVERIFIED. No automatic confirmation is performed.
         Requires todo and a strict Boolean needs_support_confirmation, with no
         missing/null default or bare-response fallback. Reuses TodoDetail.
         Omit absent attachments, preserve empty content and upload-ID arrays.
@@ -1065,13 +1094,14 @@ class CasaApi(VerifiedWritesMixin):
         data = await self.client.post(path, json=_write_payload(body, StrictCreateTodoBody))
         return _parse(CreateTodoResponse, data)
 
-    @unverified
     async def send_request_message(
         self, home_id: str, request_id: str, body: SendRequestMessageRequest
     ) -> SendRequestMessageResponse:
-        """Send one request-thread message only when explicitly called.
+        """VERIFIED (live, 2026-10). Send one request-thread message, once.
 
-        Wire format inferred statically from the app (LIKELY). Backend behavior UNVERIFIED.
+        Observed body ``{"sender_role": "member", "content": "..."}`` with no
+        attachments key, answered by HTTP 201 ``{"message": RequestMessage}``.
+        Messages with attachments remain UNVERIFIED.
         Optional content, attachments.upload_ids and member role omit None.
         Explicit empty strings and lists are preserved. Privileged roles rejected.
         Required message envelope reuses RequestMessage, not CasaAIMessage.

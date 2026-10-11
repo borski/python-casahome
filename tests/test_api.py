@@ -121,14 +121,10 @@ LIVE_VERIFIED_READS = frozenset(
 )
 STILL_UNVERIFIED = frozenset(
     {
-        "create_todo",
-        "create_todo_result",
-        "send_request_message",
         "update_entity_properties",
         "casa_ai_events",
         "membership_savings",
         "availability_request_details",
-        "document_suggestions",
         "task_details",
         "vendor_visit_details",
         "vendor_visit_autopilot_plan",

@@ -32,6 +32,11 @@ from casahome.models.documents import (
     CreateDocumentResponse,
     DocumentTypesResponse,
     DocumentUploadSessionsResponse,
+    SavedResponse,
+)
+from casahome.models.entity_publish import (
+    SaveAndPublishEntityRequest,
+    SaveAndPublishEntityResponse,
 )
 from casahome.models.mailbox import MailboxClaimResponse
 from casahome.models.preferences import AccessPreferencesResponse, NotificationSettingsResponse
@@ -46,6 +51,7 @@ from casahome.models.verified_writes import (
     MultiSelectRoundAnswer,
     NotificationSettingUpdate,
     RateCasaAIMessageRequest,
+    RespondToDocumentStructureSuggestionRequest,
     RespondToSuggestedTodoRequest,
     SendCasaAIMessageRequest,
     SingleSelectAnswer,
@@ -55,7 +61,7 @@ from casahome.models.verified_writes import (
     UpdateAutopilotPlanRequest,
     UpdateNotificationSettingsRequest,
 )
-from casahome.models.write_contracts import BasicMessageResponse
+from casahome.models.write_contracts import BasicMessageResponse, _write_payload
 from casahome.uploads import put_storage_bytes
 
 _IDEMPOTENCY_KEY = re.compile(r"[\x21-\x7e]{1,255}")
@@ -117,6 +123,38 @@ class VerifiedWritesMixin:
     client: CasaClient
 
     # Inventory ---------------------------------------------------------------
+
+    async def save_and_publish_entity(
+        self, home_id: str, entity_id: str, body: SaveAndPublishEntityRequest
+    ) -> SaveAndPublishEntityResponse:
+        """VERIFIED for model.name and empty props. Save and publish once.
+
+        Observed POST to the member-home entity's ``save_and_publish`` route
+        with ``{"model": {"name": str}, "props": []}``, answered HTTP 200 with
+        entity_id, status="published", make, model and identity.state="verified".
+        Make selection, model-ID variants, nonempty props and empty-name/clear
+        semantics are UNVERIFIED. Nonempty props and extra fields are rejected.
+        No entity refresh or second write is performed.
+        """
+        path = f"{_write_home(home_id, member=True)}/entity/{_write_id(entity_id)}/save_and_publish"
+        payload = _write_payload(body, SaveAndPublishEntityRequest)
+        return _parse(SaveAndPublishEntityResponse, await self.client.post(path, json=payload))
+
+    async def update_entity_model(
+        self, home_id: str, entity_id: str, model_name: str
+    ) -> SaveAndPublishEntityResponse:
+        """VERIFIED name-only model update via save_and_publish, with empty props.
+
+        The supplied name is preserved. Empty-name/clear semantics are UNVERIFIED.
+        No make, catalog ID or editable-property variants are inferred.
+        """
+        path = f"{_write_home(home_id, member=True)}/entity/{_write_id(entity_id)}/save_and_publish"
+        payload = _body(
+            SaveAndPublishEntityRequest,
+            {"model": {"name": model_name}, "props": []},
+            exclude_none=True,
+        )
+        return _parse(SaveAndPublishEntityResponse, await self.client.post(path, json=payload))
 
     async def move_entity_to_room(
         self, home_id: str, entity_id: str, room_id: str
@@ -192,6 +230,14 @@ class VerifiedWritesMixin:
         return result
 
     # To-dos ------------------------------------------------------------------
+
+    async def delete_todo(self, home_id: str, todo_id: str) -> None:
+        """VERIFIED. DELETE the home's todo with no body, answered HTTP 204.
+
+        One attempt, including on 401. No automatic cleanup of related work.
+        """
+        path = f"{_write_home(home_id)}/todos/{_write_id(todo_id)}"
+        await self.client.delete(path)
 
     async def answer_todo_question(
         self,
@@ -391,6 +437,41 @@ class VerifiedWritesMixin:
         return _parse(MailboxClaimResponse, await self.client.post(path))
 
     # Documents ---------------------------------------------------------------
+
+    async def respond_to_document_structure_suggestion(
+        self,
+        home_id: str,
+        document_id: str,
+        suggestion_id: str,
+        expected_values: Sequence[str],
+        decision: Literal["accepted"] = "accepted",
+    ) -> SavedResponse:
+        """VERIFIED for decision=accepted and the required expected_values guard.
+
+        Observed POST to ``documents/{document_id}/structure_suggestions/
+        {suggestion_id}/respond`` with ``{"decision": "accepted",
+        "expected_values": [str]}``, answered HTTP 200 ``{"saved": true}``.
+        The base is /protected/home, not /protected/member/home.
+
+        Pass the suggestion's current_values explicitly. The SDK preserves
+        their order and content. It never invents a default, re-fetches values
+        or retries a stale guard. Server mismatch handling remains UNVERIFIED.
+        Only accepted is supported. Accept and dismissal variants are rejected.
+        One attempt, including on 401. No document PATCH or automatic follow-up.
+        """
+        path = (
+            f"{_write_home(home_id)}/documents/{_write_id(document_id)}"
+            f"/structure_suggestions/{_write_id(suggestion_id)}/respond"
+        )
+        payload = _body(
+            RespondToDocumentStructureSuggestionRequest,
+            {
+                "decision": decision,
+                "expected_values": _sequence(expected_values, "expected_values"),
+            },
+            exclude_none=True,
+        )
+        return _parse(SavedResponse, await self.client.post(path, json=payload))
 
     async def create_document_upload_sessions(
         self, home_id: str, files: Sequence[DocumentUploadFile]

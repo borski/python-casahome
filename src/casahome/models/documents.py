@@ -1,10 +1,11 @@
 """Documents, thumbnails, and the three-step upload flow.
 
-Document item, detail, thumbnail and upload shapes are VERIFIED (live, 2026-10).
-Suggestion item schemas are static and UNVERIFIED.
+Document, file metadata and populated suggestion shapes were observed in traffic.
+Suggestion view=all was observed. Other view values and populated match/cursor
+behavior remain UNVERIFIED.
 """
 
-from pydantic import Field, StrictBool
+from pydantic import Field, JsonValue, StrictBool, StrictInt
 
 from casahome.models._base import CasaModel
 
@@ -95,7 +96,10 @@ class DocumentDetailsResponse(CasaModel):
 
 
 class DocumentSuggestion(CasaModel):
-    """Static document suggestion fields."""
+    """VERIFIED populated fields. States pending and accepted observed.
+
+    Matches were empty. Future match items stay opaque JSON, not guessed types.
+    """
 
     id: str
     todo_id: str
@@ -106,22 +110,30 @@ class DocumentSuggestion(CasaModel):
     citations: list[DocumentCitation]
     state: str
     work_deleted: bool
+    matches: list[JsonValue] = Field(default_factory=list)
     task_id: str | None = None
     request_id: str | None = None
 
 
 class DocumentSuggestionsResponse(CasaModel):
-    """UNVERIFIED suggestions envelope."""
+    """VERIFIED populated envelope. Non-null cursor behavior is UNVERIFIED."""
 
     suggestions: list[DocumentSuggestion]
+    next_cursor: str | None = None
     analysis_status: str | None = None
     limitations: list[str]
 
 
 class DocumentStructureSuggestion(CasaModel):
-    """Static structure suggestion metadata."""
+    """VERIFIED populated fields. States pending and accepted observed.
+
+    Newly typed fields default to None for older synthetic/static payloads.
+    The response decision accepted was observed. No dismissal variant is inferred.
+    """
 
     id: str
+    entity_id: str | None = None
+    definition_id: str | None = None
     section: str
     title: str
     current_values: list[str]
@@ -130,13 +142,34 @@ class DocumentStructureSuggestion(CasaModel):
     reason: str
     state: str
     changed_since_analysis: bool
+    responded_at: StrictInt | None = None
     citations: list[DocumentCitation]
 
 
 class DocumentStructureSuggestionsResponse(CasaModel):
-    """Envelope VERIFIED (live, 2026-10), observed empty. Item fields are static."""
+    """VERIFIED envelope and populated suggestion fields."""
 
     suggestions: list[DocumentStructureSuggestion]
+
+
+class SavedResponse(CasaModel):
+    """VERIFIED structure response envelope, observed saved=true.
+
+    Requires a strict Boolean. Missing, null or coerced flags aren't success.
+    False remains representable, but its server behavior is UNVERIFIED.
+    """
+
+    saved: StrictBool
+
+
+class DocumentFileMetadataResponse(CasaModel):
+    """VERIFIED signed file URL and integer expiry. No download occurs.
+
+    The URL is a short-lived credential. Don't log or persist it.
+    """
+
+    url: str
+    expires_at: StrictInt
 
 
 class DocumentThumbnailResponse(CasaModel):

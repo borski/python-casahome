@@ -1,7 +1,7 @@
-"""Static-only write codecs. Backend acceptance and business semantics are UNVERIFIED.
+"""Strict write codecs with per-variant evidence recorded on API methods.
 
-Request encoders, coding keys and response shapes were inferred from the Casa
-iOS app. The reconstructed wire contracts are LIKELY, not confirmed live.
+Plain-text todo creation and member request messages were observed in traffic.
+Attachments and property PATCH contracts remain static and UNVERIFIED.
 These models neither authorize nor execute operations.
 """
 

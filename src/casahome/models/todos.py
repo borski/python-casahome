@@ -1,10 +1,10 @@
-"""To-do models (UNVERIFIED endpoints)."""
+"""To-do models. Plain-text creation and populated detail were observed in traffic."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from pydantic import Field
+from pydantic import Field, JsonValue
 
 from ._base import CasaModel
 from .enums import (
@@ -45,6 +45,9 @@ class TodoDetail(CasaModel):
     creator_role: TodoCreatorRoleField
     created_at: int
     updated_at: int
+    source_document_id: str | None = None
+    suggestion_response_reason: JsonValue = None
+    # Only null was observed for the reason. Keep future values opaque.
     can_delete: bool = False
     is_suggested: bool = False
     attachments: list[Any] = Field(default_factory=list)

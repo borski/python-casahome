@@ -511,6 +511,7 @@ VERIFIED_READS = frozenset(
         "home_feed",
         "membership_info",
         "document_details",
+        "document_suggestions",
         "document_structure_suggestions",
         "request_purchases",
     }
