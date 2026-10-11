@@ -58,6 +58,11 @@ async def put_storage_bytes(
     0-{n-1}/{n}``. No Authorization or Casa app headers. One attempt, no
     redirects. Any status other than 200/201 raises ``CasaApiError`` without
     the response body.
+
+    ``session`` is retained for source compatibility but isn't used or closed.
+    Storage owns a fresh session with no caller headers, auth, cookies,
+    middleware or environment proxy/netrc configuration. Default TLS
+    verification stays enabled. This session closes even on cancellation.
     """
     url = validate_storage_url(session_url)
     if not isinstance(data, bytes) or not data:
@@ -70,14 +75,17 @@ async def put_storage_bytes(
     }
     failure = ""
     try:
-        async with session.put(
-            url,
-            data=data,
-            headers=headers,
-            timeout=timeout,
-            allow_redirects=False,
-            raise_for_status=False,
-        ) as response:
+        async with (
+            aiohttp.ClientSession(cookie_jar=aiohttp.DummyCookieJar(), trust_env=False) as storage,
+            storage.put(
+                url,
+                data=data,
+                headers=headers,
+                timeout=timeout,
+                allow_redirects=False,
+                raise_for_status=False,
+            ) as response,
+        ):
             status = response.status
     except TimeoutError:
         failure = "Storage upload timed out"

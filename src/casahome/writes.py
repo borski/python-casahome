@@ -15,6 +15,7 @@ import asyncio
 import mimetypes
 import os
 import re
+import stat
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -501,8 +502,10 @@ class VerifiedWritesMixin:
         bytes 0-{n-1}/{n}``, answered HTTP 200.
 
         Only https URLs on storage.googleapis.com are accepted. No Casa
-        credentials or app headers are sent. One attempt, no redirects. The
-        whole file goes in one request, so it's held in memory.
+        credentials or app headers are sent. Storage owns a separate session
+        with no caller auth, cookies, headers or middleware. TLS verification
+        stays enabled. One attempt, no redirects. The whole file goes in one
+        request, so it's held in memory. The caller's Casa session stays open.
         """
         if not isinstance(mimetype, str) or not mimetype or len(mimetype) > 128:
             raise CasaRequestError("mimetype must be a nonempty string")
@@ -557,6 +560,12 @@ class VerifiedWritesMixin:
         from ``filename`` when omitted. Each step is sent once. If a later step
         fails, the earlier ones aren't undone. An unregistered upload is
         simply never attached to a document.
+
+        Local paths must open as nonempty regular files. Symlinks to regular
+        files are allowed. Reads are bounded to max_file_size_bytes plus one
+        detection byte, even if the file grows. The configured client total
+        timeout bounds waiting for the read, but cancellation can't interrupt
+        a filesystem call already running in the worker thread.
         """
         home_id = _write_id(home_id)
         filename = _filename(filename)
@@ -578,7 +587,9 @@ class VerifiedWritesMixin:
         if isinstance(source, bytes):
             content = source
         else:
-            content = await _read_bounded(Path(source), policy.max_file_size_bytes)
+            content = await _read_bounded(
+                Path(source), policy.max_file_size_bytes, timeout=self.client._timeout.total
+            )
         if not 0 < len(content) <= policy.max_file_size_bytes:
             raise CasaRequestError("file must be nonempty and within max_file_size_bytes")
 
@@ -594,20 +605,47 @@ class VerifiedWritesMixin:
         )
 
 
-async def _read_bounded(path: Path, limit: int) -> bytes:
-    """Read a local file off the event loop, refusing oversized files first."""
+async def _read_bounded(path: Path, limit: int, *, timeout: float | None = None) -> bytes:
+    """Open once, reject special files, and read at most limit plus one byte.
+
+    O_NONBLOCK keeps FIFO opens from waiting for a writer. fstat checks the
+    opened descriptor, not a racy pathname. Symlinks to regular files are
+    allowed. A timeout bounds the await, not an in-flight filesystem syscall.
+    The worker always closes its descriptor when it finishes.
+    """
 
     def read() -> bytes | None:
         try:
-            if path.stat().st_size > limit:
-                return None
-            return path.read_bytes()
+            descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
         except OSError:
             return b""
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode) or info.st_size <= 0:
+                return b""
+            if info.st_size > limit:
+                return None
+            content = bytearray()
+            while len(content) <= limit:
+                chunk = os.read(descriptor, min(64 * 1024, limit + 1 - len(content)))
+                if not chunk:
+                    break
+                content.extend(chunk)
+            return bytes(content) if len(content) <= limit else None
+        except OSError:
+            return b""
+        finally:
+            os.close(descriptor)
 
-    content = await asyncio.to_thread(read)
-    if content is None:
-        raise CasaRequestError("file exceeds max_file_size_bytes")
-    if not content:
-        raise CasaRequestError("file could not be read or is empty")
-    return content
+    try:
+        async with asyncio.timeout(timeout):
+            content = await asyncio.to_thread(read)
+    except TimeoutError:
+        message = "file read timed out"
+    else:
+        if content is None:
+            raise CasaRequestError("file exceeds max_file_size_bytes")
+        if not content:
+            raise CasaRequestError("file could not be read, isn't regular, or is empty")
+        return content
+    raise CasaRequestError(message)

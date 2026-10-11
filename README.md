@@ -286,6 +286,18 @@ the file is held in memory. The storage request carries no Casa credentials and
 is only sent to `https://storage.googleapis.com`. Signed URLs never appear in
 exception messages.
 
+Local paths are opened once and must refer to nonempty regular files. Symlinks
+to regular files are allowed. FIFOs, devices and directories are rejected.
+The actual read is capped at `max_file_size_bytes` plus one detection byte,
+including when the file grows. The client's configured total timeout bounds
+waiting for a file read. Cancellation can't interrupt a filesystem call already
+running in the worker thread, which closes its descriptor when it finishes.
+
+Storage uploads use a separate session with no caller Authorization, BasicAuth,
+cookies, custom headers or middleware. Environment proxy/netrc settings aren't
+used. Normal TLS verification stays enabled. The storage session closes on
+success, failure or cancellation. The caller's Casa session stays open.
+
 ## CasaAI event stream
 
 `api.casa_ai_events(home_id, after=None)` is an opt-in async generator over the
