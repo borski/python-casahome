@@ -6,6 +6,7 @@ readme = "README.md"
 license = "MIT"
 authors = [{ name = "Borski" }]
 requires-python = ">=3.11"
+keywords = ["casa", "home", "api", "async", "aiohttp"]
 dependencies = [
     "aiohttp>=3.9",
     "pydantic>=2.5",
@@ -16,6 +17,11 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Typing :: Typed",
 ]
+
+[project.urls]
+Repository = "https://github.com/borski/python-casahome"
+Homepage = "https://github.com/borski/python-casahome"
+Issues = "https://github.com/borski/python-casahome/issues"
 
 [dependency-groups]
 dev = [

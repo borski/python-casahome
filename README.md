@@ -17,7 +17,13 @@ Version 0.2.0, alpha.
 
 ## Install
 
-PyPI isn't set up yet. Install from GitHub:
+Install from PyPI:
+
+```
+pip install python-casahome
+```
+
+Alternatively, install from the tagged GitHub source:
 
 ```
 pip install "python-casahome @ git+https://github.com/borski/python-casahome@v0.2.0"
