@@ -120,14 +120,17 @@ class BasicMessageResponse(CasaModel):
     message: StrictStr
 
 
-def _write_payload(body: BaseModel, schema: type[BaseModel]) -> dict[str, Any]:
+def _write_payload(
+    body: BaseModel, schema: type[BaseModel], *, exclude_none: bool = True
+) -> dict[str, Any]:
     """Revalidate at the I/O boundary, including copied or mutated nested models.
 
     Accept valid legacy todo bodies without accepting their permissive extras.
     Validate strict instances directly so model_copy's unknown fields can't hide
     behind serialization. Python-mode dumping adapts valid legacy bodies without
     coercing their values. Only the validated result is JSON-encoded, recursively
-    omitting None but preserving empty values.
+    omitting None but preserving empty values. Bodies whose observed wire form
+    carries explicit nulls pass ``exclude_none=False``.
     """
     if not isinstance(body, BaseModel):
         raise TypeError("write body must be a Pydantic request model")
@@ -141,7 +144,7 @@ def _write_payload(body: BaseModel, schema: type[BaseModel]) -> dict[str, Any]:
     except ValidationError as err:
         message = f"Invalid {schema.__name__} write body: {err.error_count()} validation error(s)"
     else:
-        return validated.model_dump(mode="json", exclude_none=True)
+        return validated.model_dump(mode="json", exclude_none=exclude_none)
     # Raise outside the handler, like _parse. Pydantic's error echoes input
     # values, and an implicit __context__ would leak them in tracebacks.
     raise CasaRequestError(message)

@@ -6,12 +6,14 @@ Unofficial. Not affiliated with or endorsed by Casa.
 
 ## Status
 
-Version 0.2.0, alpha.
+Version 0.3.0, alpha.
 
-- The library is read-heavy. Most methods are GETs, and most of those have been
-  confirmed against live traffic.
-- A few write methods exist. They are unverified and haven't been exercised
-  against the real backend. Treat them as experimental.
+- Most reads have been confirmed against live traffic.
+- Version 0.3.0 adds writes whose method, path, request body and response were
+  confirmed against live app traffic: moving inventory, Casa AI messages and
+  ratings, to-do questions and hand-off, Autopilot, notification and access
+  settings, mailbox claim, and document upload.
+- A few older writes remain unverified. Treat them as experimental.
 - Endpoint shapes were inferred from the iOS app and confirmed against live
   traffic where marked. Casa can change its private API at any time.
 
@@ -26,7 +28,7 @@ pip install python-casahome
 Alternatively, install from the tagged GitHub source:
 
 ```
-pip install "python-casahome @ git+https://github.com/borski/python-casahome@v0.2.0"
+pip install "python-casahome @ git+https://github.com/borski/python-casahome@v0.3.0"
 ```
 
 Requires Python 3.11 or newer.
@@ -138,20 +140,26 @@ elements inside lists. All live confirmation dates from 2026-10.
 | `autopilot_plans` | yes | |
 | `paint_brands`, `paint_collections`, `paint_colors`, `paint_search` | yes | |
 | `suggested_todos` | yes | Question rounds and destination stay opaque. |
-| `todo_details` | yes | Same caveat. |
+| `todo_details` | yes | Question rounds and destination typed. Question items stay JSON. |
 | `document_types` | yes | |
+| `documents` | yes | App sends `limit=30&sort=uploaded`. `q` and `document_type` untested. |
+| `document_details` | yes | |
+| `document_thumbnail` | yes | Signed preview URLs. Never fetched by the library. |
+| `document_structure_suggestions` | partial | Seen empty. |
+| `request_details` | yes | |
+| `request_purchases` | partial | Envelope seen. Item lists empty. |
+| `membership_info` | yes | Active membership. A home without one returns 404. |
 | `help_center_bundle` | yes | Only `member_ios` tested. |
 | `release_notes` | yes | |
 | `release_notes_diff` | yes | |
 | `casa_ai_bootstrap` | partial | Messages not seen populated. |
 | `casa_ai_messages` | partial | |
-| `requests_tab` | partial | |
+| `requests_tab` | yes | Request cards seen populated. Task cards untested. |
 | `completed_requests` | partial | |
 | `calendar` | partial | Bounds sent as epoch seconds. |
 | `calendar_busy` | partial | |
 | `calendar_sync` | partial | |
 | `mailbox`, `mail_items`, `packages` | partial | |
-| `documents` | partial | Query parameters untested. |
 | `work_document_source` | partial | Only the `todo_id` selector tested. |
 | `vehicles` | partial | |
 | `utilities_insights` | partial | |
@@ -161,30 +169,44 @@ elements inside lists. All live confirmation dates from 2026-10.
 | `recurring_vendors` | partial | |
 | `bookable_handyman_tasks` | partial | Items stay opaque JSON. |
 | `referral_code` | partial | `display` and `referred_homes` stay opaque JSON. |
-| `request_details` | no | |
-| `membership_info` | no | Returned 404 in testing. |
-| `membership_savings` | no | Returned 404 in testing. |
+| `membership_savings` | no | Returns 404 even with an active membership. |
 | `availability_request_details` | no | |
-| `document_details` | no | |
 | `document_suggestions` | no | |
-| `document_structure_suggestions` | no | |
-| `request_purchases` | no | |
 | `task_details` | no | |
 | `vendor_visit_details` | no | |
 | `vendor_visit_autopilot_plan` | no | |
 | `vendor_visit_calls` | no | |
 | `vendor_visit_conversation` | no | |
 | `vendor_visit_purchases` | no | |
-| `casa_ai_events` | partial | Opt-in SSE stream. Transport confirmed, event payloads untested. |
+| `casa_ai_events` | partial | Opt-in SSE stream. Transport, cursor replay and `message.upsert` updates confirmed. `resync_required` untested. |
 
 ### Writes
 
-| Method | Live-confirmed |
-|---|---|
-| `create_todo_result` | no |
-| `create_todo` | no |
-| `send_request_message` | no |
-| `update_entity_properties` | no |
+"Yes" means the method, path, request body and response were seen in live app
+traffic and the library sends the same body.
+
+| Method | Live-confirmed | Notes |
+|---|---|---|
+| `move_entity_to_room` | yes | Replaces the item's room. |
+| `send_ai_message` | yes | Sends an `Idempotency-Key` and returns it. Reply arrives on the event stream. |
+| `rate_ai_message` | yes | `good` or `bad`. |
+| `answer_todo_question` | yes | Answers seen. The skip body is unverified. |
+| `submit_todo_question_round` | yes | |
+| `respond_to_suggested_todo` | yes | Only `accept` seen. |
+| `materialize_todo`, `send_todo_to_concierge` | yes | Only the `concierge` destination seen. |
+| `update_autopilot_plan` | yes | |
+| `update_notification_settings` | yes | Only the `push` channel seen. |
+| `update_access_preferences` | yes | All four keys always sent. |
+| `claim_mailbox` | yes | |
+| `create_document_upload_sessions` | yes | Upload step 1. |
+| `upload_document_content` | yes | Upload step 2, to Cloud Storage. |
+| `create_document` | yes | Upload step 3. |
+| `upload_document` | yes | All three steps, after checking the file against `document_types`. |
+| `clear_ai_message_rating` | no | Path from the app only. |
+| `create_todo_result` | no | |
+| `create_todo` | no | |
+| `send_request_message` | no | |
+| `update_entity_properties` | no | |
 
 ## Models
 
@@ -202,9 +224,9 @@ returned as data. The library never follows them.
 
 ## Writes
 
-The write methods are unverified. Their request bodies were inferred from the
-app and have not been exercised against the live backend. Nothing is sent until
-you await a write method.
+Live-confirmed writes are listed in the coverage table above. The remaining
+writes were inferred from the app and haven't been exercised against the live
+backend. Nothing is sent until you await a write method.
 
 - Each write is sent exactly once. There is no retry, including on 401. The ID
   token is refreshed before the request, and a 401 raises `CasaAuthError`.
@@ -216,10 +238,29 @@ you await a write method.
   10,000 characters.
 - Optional fields set to `None` are omitted from the JSON. Empty strings and
   empty lists are sent as given.
+- Where the app sends an explicit `null` (for example `other_text` in to-do
+  answers, or the access preference keys), the library sends `null` too.
+- `send_ai_message` is the only write with an `Idempotency-Key`. Pass the
+  returned key back to resend after a timeout without creating a duplicate.
 - `send_request_message` only allows the `member` sender role.
 - `create_todo_result` returns the full envelope, including
   `needs_support_confirmation`. `create_todo` is the older helper that returns
   just the todo.
+
+### Document upload
+
+```python
+result = await api.upload_document(home_id, Path("inspection.pdf"), "inspection.pdf")
+print(result.document.id, result.already_exists)
+```
+
+`upload_document` reads `document_types` first and rejects files whose MIME
+type isn't allowed or whose size exceeds `max_file_size_bytes`. It then
+reserves an upload session, sends the bytes to the signed Cloud Storage URL
+Casa returns, and registers the document. The bytes go out in one request, so
+the file is held in memory. The storage request carries no Casa credentials and
+is only sent to `https://storage.googleapis.com`. Signed URLs never appear in
+exception messages.
 
 ## CasaAI event stream
 
@@ -230,6 +271,7 @@ CasaAI server-sent event stream. It doesn't reconnect on its own. Close it with
 ```python
 from contextlib import aclosing
 
+from casahome.models import CasaAIMessageUpsertChange
 from casahome.streaming import CasaAIResyncRequiredEvent, CasaAIThreadUpdateEvent
 
 async with aclosing(api.casa_ai_events(home_id, after=saved_cursor)) as events:
@@ -238,8 +280,18 @@ async with aclosing(api.casa_ai_events(home_id, after=saved_cursor)) as events:
         if isinstance(event, CasaAIResyncRequiredEvent):
             break  # Reload state, then subscribe again.
         if isinstance(event, CasaAIThreadUpdateEvent):
-            update = event.payload  # Opaque JSON.
+            for change in event.update().changes:
+                if isinstance(change, CasaAIMessageUpsertChange):
+                    print(change.message.sender_role, change.message.content)
 ```
+
+`event.update()` parses the payload. `message.upsert` changes are typed, and
+any other change type parses as `CasaAIUnknownChange` with its fields kept.
+`event.payload` stays available as raw JSON.
+
+Cursors (`event.id`, and `event_cursor` from `casa_ai_bootstrap`) are opaque.
+Store them and pass them back unchanged. Resuming from an earlier cursor
+replays the updates since that point.
 
 Lines are capped at 64 KiB and events at 256 KiB. A 401 refreshes the token and
 retries the GET once.

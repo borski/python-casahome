@@ -116,29 +116,26 @@ LIVE_VERIFIED_READS = frozenset(
         "mailbox",
         "mail_items",
         "packages",
+        "request_details",
     }
 )
 STILL_UNVERIFIED = frozenset(
     {
-        "request_details",
         "create_todo",
         "create_todo_result",
         "send_request_message",
         "update_entity_properties",
         "casa_ai_events",
-        "membership_info",
         "membership_savings",
         "availability_request_details",
-        "document_details",
         "document_suggestions",
-        "document_structure_suggestions",
-        "request_purchases",
         "task_details",
         "vendor_visit_details",
         "vendor_visit_autopilot_plan",
         "vendor_visit_calls",
         "vendor_visit_conversation",
         "vendor_visit_purchases",
+        "clear_ai_message_rating",
     }
 )
 

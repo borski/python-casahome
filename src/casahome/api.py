@@ -13,16 +13,23 @@ Confidence per method:
 from __future__ import annotations
 
 import os
-import re
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from contextlib import aclosing, asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal, TypeVar
+from typing import Any, Literal
 
-from pydantic import BaseModel, ValidationError
-
+from casahome._common import (
+    _home,
+    _member_home,
+    _parse,
+    _positive_int,
+    _safe_home,
+    _safe_id,
+    is_unverified,
+    unverified,
+)
 from casahome.client import CasaClient
 from casahome.const import (
     APP_MARKETING_VERSION,
@@ -31,7 +38,6 @@ from casahome.const import (
     CASA_DEVICE_APP,
     MAX_APP_BUILD,
 )
-from casahome.exceptions import CasaResponseError
 from casahome.models import (
     BasicMessageResponse,
     Bootstrap,
@@ -75,6 +81,7 @@ from casahome.models.documents import (
     DocumentsResponse,
     DocumentStructureSuggestionsResponse,
     DocumentSuggestionsResponse,
+    DocumentThumbnailResponse,
     DocumentTypesResponse,
     WorkDocumentSourceResponse,
 )
@@ -119,37 +126,9 @@ from casahome.models.visits import VendorVisitDetails, VisitCallsResponse, Visit
 from casahome.models.write_contracts import CreateTodoBody as StrictCreateTodoBody
 from casahome.models.write_contracts import _write_payload
 from casahome.streaming import CasaAIEvent, _stream_events, _validate_cursor, unverified_stream
+from casahome.writes import VerifiedWritesMixin
 
-F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
-M = TypeVar("M", bound=BaseModel)
-
-
-def _parse(model: type[M], data: Any) -> M:
-    """Validate a response, turning schema drift into a library error."""
-    try:
-        return model.model_validate(data)
-    except ValidationError as err:
-        message = f"Unexpected {model.__name__} response: {err.error_count()} validation error(s)"
-    # Raise outside the handler. Pydantic's exception can contain private field
-    # values, and even an implicit context would leak them in tracebacks.
-    raise CasaResponseError(message)
-
-
-_UNVERIFIED_NOTE = (
-    "UNVERIFIED: path and HTTP method inferred statically from the iOS app (LIKELY). "
-    "Not yet observed live."
-)
-
-
-def unverified(func: F) -> F:
-    """Mark a method whose path or HTTP method hasn't been seen in real traffic."""
-    func.__casa_unverified__ = True  # type: ignore[attr-defined]
-    func.__doc__ = f"{_UNVERIFIED_NOTE}\n\n{func.__doc__ or ''}".rstrip()
-    return func
-
-
-def is_unverified(method: Callable[..., Any]) -> bool:
-    return bool(getattr(method, "__casa_unverified__", False))
+__all__ = ["CasaApi", "is_unverified", "unverified"]
 
 
 def _local_iana_timezone() -> str:
@@ -173,39 +152,6 @@ def _epoch(value: datetime | int) -> int:
     return int(value)
 
 
-def _home(home_id: str) -> str:
-    """Base for most per-home endpoints."""
-    return f"/protected/home/{home_id}"
-
-
-def _member_home(home_id: str) -> str:
-    """Base for inventory, entity, room, and story endpoints only."""
-    return f"/protected/member/home/{home_id}"
-
-
-def _safe_id(value: str | int) -> str:
-    """Validate new identifier inputs without assuming UUID or normalizing IDs."""
-    if isinstance(value, bool) or not isinstance(value, (str, int)):
-        raise ValueError("identifier must be a string or integer")
-    text = str(value)
-    if len(text) > 2048:
-        raise ValueError("identifier exceeds SDK limit of 2048 characters")
-    if text in {".", ".."} or not re.fullmatch(r"[A-Za-z0-9._~-]+", text):
-        raise ValueError("identifier must be a nonempty safe path segment")
-    return text
-
-
-def _safe_home(home_id: str, *, member: bool = False) -> str:
-    home_id = _safe_id(home_id)
-    return _member_home(home_id) if member else _home(home_id)
-
-
-def _positive_int(value: int, name: str) -> str:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        raise ValueError(f"{name} must be a positive integer")
-    return str(value)
-
-
 def _app_build(value: int, name: str) -> str:
     """Validate a build number the app would send as a positive Int32."""
     text = _positive_int(value, name)
@@ -227,11 +173,11 @@ def _busy_bounds(start: datetime | int, end: datetime | int) -> dict[str, str]:
     return {"start_time": str(start_epoch), "end_time": str(end_epoch)}
 
 
-class CasaApi:
+class CasaApi(VerifiedWritesMixin):
     """Typed wrappers around Casa member endpoints.
 
-    UNVERIFIED writes execute only when callers explicitly await them. They add
-    no upload chain, support confirmation or workflow retry. Writes make exactly
+    Live-verified writes come from ``VerifiedWritesMixin`` (``casahome.writes``).
+    Writes execute only when callers explicitly await them and make exactly
     one attempt: the client force-refreshes the ID token first and raises
     ``CasaAuthError`` on HTTP 401 instead of retrying.
     """
@@ -344,10 +290,13 @@ class CasaApi:
         return _parse(WeatherResponse, data)
 
     async def requests_tab(self, home_id: str) -> RequestsResponse:
-        """VERIFIED path, method, and envelope (live GET, 2026-10).
+        """VERIFIED path, method, envelope and request card shape (live GET, 2026-10).
 
-        Requests, tasks, and to-dos lanes in one call. Every observed lane was
-        empty, so the card item shape is still UNVERIFIED.
+        Requests, tasks, and to-dos lanes in one call. Request cards were seen
+        populated with id, title, latest_message_preview, emoji, updated_at,
+        has_unread_messages, the pending_* and ready_to_review_availability
+        counts, concierge_awaiting_reply, type (``concierge``) and vendor_visits.
+        Task card items remain UNVERIFIED.
         """
         data = await self.client.get(f"{_home(home_id)}/requests_tab")
         return _parse(RequestsResponse, data)
@@ -549,10 +498,10 @@ class CasaApi:
         return _parse(PaintColorsResponse, await self.client.get(path))
 
     async def todo_details(self, home_id: str, todo_id: str) -> TodoDetailsResponse:
-        """VERIFIED (live GET, 2026-10). Populated todo and attachments.
+        """VERIFIED (live GET, 2026-10). Populated todo, attachments, question rounds.
 
-        Question rounds were empty and destination null, so those nested
-        schemas remain opaque and UNVERIFIED.
+        Question rounds (id, sequence, state, questions) and a ``request``
+        destination were observed. Individual question items stay JSON.
         """
         path = f"{_safe_home(home_id)}/todos/{_safe_id(todo_id)}"
         return _parse(TodoDetailsResponse, await self.client.get(path))
@@ -612,11 +561,13 @@ class CasaApi:
         document_type: str | None = None,
         sort: str | None = None,
     ) -> DocumentsResponse:
-        """VERIFIED (live GET, 2026-10). Parameter-free, empty documents envelope.
+        """VERIFIED (live GET, 2026-10). Populated documents with limit and sort.
 
-        Populated items and query
-        behavior remain UNVERIFIED. No default sort or invented sort vocabulary.
-        Only non-None filters are sent. Cursors remain opaque query strings.
+        The app sent ``limit=30&sort=uploaded`` and got ``documents`` items plus
+        ``next_cursor``. ``sort`` defaults to unset for compatibility. Pass
+        ``sort="uploaded"`` to match the app. ``q``, ``document_type`` and
+        ``cursor`` behavior remain UNVERIFIED. Only non-None filters are sent.
+        Cursors remain opaque query strings.
         """
         path = f"{_safe_home(home_id)}/documents"
         params = {"limit": _positive_int(limit, "limit")}
@@ -893,16 +844,16 @@ class CasaApi:
 
     # UNVERIFIED reads -------------------------------------------------------
 
-    @unverified
     async def membership_info(self, home_id: str) -> MembershipDetails:
-        """Membership name, start date and benefits.
+        """VERIFIED (live GET, 2026-10) envelope for an active membership.
 
-        A live GET (2026-10) returned 404 with a generic body. Accounts without
-        membership data may legitimately 404, so that doesn't disprove the route.
-        Path and schema stay UNVERIFIED.
+        HTTP 200 bare object with amount, amount_cents, benefits,
+        cancel_at_period_end, current_period_start/end, interval, member_since,
+        name, next_billing_date, status and Stripe customer/subscription IDs.
+        An earlier probe on a home without an active membership returned 404,
+        so expect ``CasaApiError`` 404 in that state.
 
-        Provisional bare object, not a guessed membership envelope. No diagnosis,
-        billing-detail, lifecycle or payment calls. Amount and interval stay raw.
+        No billing-detail, lifecycle or payment calls. Amount and interval stay raw.
         """
         path = f"{_safe_home(home_id)}/membership/info"
         return _parse(MembershipDetails, await self.client.get(path))
@@ -911,9 +862,9 @@ class CasaApi:
     async def membership_savings(self, home_id: str) -> MembershipSavings:
         """Membership savings totals and breakdown.
 
-        A live GET (2026-10) returned 404 ``MEMBERSHIP_SAVINGS_NOT_FOUND``. The
-        domain-specific code suggests a routed handler with no data, not proof
-        of the schema.
+        A live GET (2026-10) returned 404 ``MEMBERSHIP_SAVINGS_NOT_FOUND``, even
+        for an active membership. The domain-specific code suggests a routed
+        handler with no data, not proof of the schema.
 
         Provisional bare object. Explicit seconds/cents retained. No inferred
         reporting period, date parsing, currency conversion or financial actions.
@@ -932,15 +883,23 @@ class CasaApi:
         path = f"{_safe_home(home_id)}/availability_requests/{_safe_id(availability_request_id)}"
         return _parse(MemberAvailabilityDetail, await self.client.get(path))
 
-    @unverified
     async def document_details(self, home_id: str, document_id: str) -> DocumentDetailsResponse:
-        """One document's metadata and organization status.
+        """VERIFIED (live GET, 2026-10). ``{"document": {...}}`` populated.
 
-        Metadata only. No file/thumbnail route, download, analysis or organization.
-        Envelope and populated document fields remain UNVERIFIED.
+        Metadata plus organization and extraction status. No download.
         """
         path = f"{_safe_home(home_id)}/documents/{_safe_id(document_id)}"
         return _parse(DocumentDetailsResponse, await self.client.get(path))
+
+    async def document_thumbnail(self, home_id: str, document_id: str) -> DocumentThumbnailResponse:
+        """VERIFIED (live GET, 2026-10). Signed preview URLs for one document.
+
+        Observed ``url``, ``expires_at`` (epoch seconds), ``preview_pages`` and
+        ``page_count_url``. The URLs are short-lived signed credentials. The
+        library never fetches them. Don't log them.
+        """
+        path = f"{_safe_home(home_id)}/documents/{_safe_id(document_id)}/thumbnail"
+        return _parse(DocumentThumbnailResponse, await self.client.get(path))
 
     @unverified
     async def document_suggestions(
@@ -954,23 +913,23 @@ class CasaApi:
         path = f"{_safe_home(home_id)}/documents/{_safe_id(document_id)}/suggestions"
         return _parse(DocumentSuggestionsResponse, await self.client.get(path))
 
-    @unverified
     async def document_structure_suggestions(
         self, home_id: str, document_id: str
     ) -> DocumentStructureSuggestionsResponse:
-        """Existing structure suggestions for one document.
+        """VERIFIED (live GET, 2026-10) envelope, observed ``{"suggestions": []}``.
 
-        Reads metadata and citations only, never responds or edits inventory.
+        Populated item fields are static and UNVERIFIED. Reads only, never
+        responds or edits inventory.
         """
         path = f"{_safe_home(home_id)}/documents/{_safe_id(document_id)}/structure_suggestions"
         return _parse(DocumentStructureSuggestionsResponse, await self.client.get(path))
 
-    @unverified
     async def request_purchases(self, home_id: str, request_id: str) -> ScopedPurchasesResponse:
-        """Purchases scoped to one request. Provisional response model.
+        """VERIFIED (live GET, 2026-10) envelope for one request's purchases.
 
-        Scoped envelope and items UNVERIFIED. Doesn't require the home-only
-        non_purchase_invoices field, which the app model omits.
+        Observed context_title, pending_purchase_approvals, approved_purchases,
+        purchased_items and next_package_pickup_by (epoch seconds). No
+        non_purchase_invoices key. Item shapes remain static.
         No approval, returns, invoice-detail or payment calls.
         """
         path = f"{_safe_home(home_id)}/requests/{_safe_id(request_id)}/purchases"
@@ -1063,11 +1022,17 @@ class CasaApi:
             async for event in events:
                 yield event
 
-    @unverified
     async def request_details(self, home_id: str, request_id: str) -> RequestDetails:
-        """A single request thread: messages, visits, invoices, purchases."""
-        data = await self.client.get(f"{_home(home_id)}/requests/{request_id}")
-        return _parse(RequestDetails, data)
+        """VERIFIED (live GET, 2026-10). One request thread.
+
+        Populated id, type, status, title, emoji, timestamps, unread flag,
+        ``summary`` (scheduled_visit_count, total_spent, total_spent_display),
+        messages (with sender avatar fields, attachments and the scheduling,
+        availability, invoice and purchase-approval slots), plus visits,
+        invoices, purchases and feedback.
+        """
+        path = f"{_safe_home(home_id)}/requests/{_safe_id(request_id)}"
+        return _parse(RequestDetails, await self.client.get(path))
 
     # UNVERIFIED writes ------------------------------------------------------
 

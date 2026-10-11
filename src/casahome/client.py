@@ -66,15 +66,19 @@ class CasaClient:
         json: Any | None = None,
         params: Mapping[str, str] | None = None,
         retry_on_401: bool | None = None,
+        headers: Mapping[str, str] | None = None,
     ) -> Any:
         """Send a request and return decoded JSON (or None for empty bodies).
 
         ``retry_on_401`` defaults to True for GET only. Writes (POST, PATCH,
-        DELETE) default to a single attempt: a 401 after the server may have
+        PUT, DELETE) default to a single attempt: a 401 after the server may have
         acted would turn a retry into a duplicate write. Non-retrying requests
         start with a force-refreshed ID token instead, so an expiring token
         can't trigger the 401 in the first place. A 401 still invalidates the
         rejected token and raises ``CasaAuthError``.
+
+        ``headers`` adds per-request headers, such as ``Idempotency-Key``. They
+        can't override the auth or app identity headers.
 
         Non-GET error bodies never fall back to raw response text. Only the
         structured error envelope fields are kept, since a write's error body
@@ -85,13 +89,17 @@ class CasaClient:
         _LOGGER.debug("%s %s", method, path)
         if not retry:
             await self.auth.refresh()
-        status, body, used = await self._send(method, path, json=json, params=params)
+        status, body, used = await self._send(
+            method, path, json=json, params=params, extra_headers=headers
+        )
         if status == 401:
             self.auth.invalidate(used)
             if not retry:
                 raise CasaAuthError(f"Casa rejected the ID token (HTTP 401) on {method}")
             _LOGGER.debug("401 on %s %s, refreshing token and retrying once", method, path)
-            status, body, _ = await self._send(method, path, json=json, params=params)
+            status, body, _ = await self._send(
+                method, path, json=json, params=params, extra_headers=headers
+            )
             if status == 401:
                 raise CasaAuthError("Casa rejected the refreshed token (HTTP 401)")
 
@@ -113,6 +121,7 @@ class CasaClient:
         *,
         json: Any | None,
         params: Mapping[str, str] | None,
+        extra_headers: Mapping[str, str] | None = None,
     ) -> tuple[int, str, str]:
         token = await self.auth.get_id_token()
         headers = {
@@ -122,6 +131,10 @@ class CasaClient:
             "User-Agent": USER_AGENT,
             "Accept": "application/json",
         }
+        reserved = {name.lower() for name in (*headers, "Content-Type")}
+        for name, value in (extra_headers or {}).items():
+            if name.lower() not in reserved:
+                headers[name] = value
         kwargs: dict[str, Any] = {"headers": headers, "timeout": self._timeout}
         if json is not None:
             headers["Content-Type"] = "application/json"
@@ -143,6 +156,9 @@ class CasaClient:
 
     async def patch(self, path: str, *, json: Any | None = None) -> Any:
         return await self.request("PATCH", path, json=json, retry_on_401=False)
+
+    async def put(self, path: str, *, json: Any | None = None) -> Any:
+        return await self.request("PUT", path, json=json, retry_on_401=False)
 
     async def delete(self, path: str) -> Any:
         return await self.request("DELETE", path, retry_on_401=False)

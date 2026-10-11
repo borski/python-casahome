@@ -55,6 +55,12 @@ class MailboxPlan(CasaModel):
     overage_rate_usd_cents: int
 
 
+class MailboxClaimResponse(CasaModel):
+    """Body from claiming a mailbox. VERIFIED (live, 2026-10)."""
+
+    mailbox: MemberMailbox
+
+
 class MailboxOverviewResponse(CasaModel):
     mailbox: MemberMailbox | None = None
     plan: MailboxPlan | None = None

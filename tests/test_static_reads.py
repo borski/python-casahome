@@ -509,6 +509,10 @@ VERIFIED_READS = frozenset(
         "referral_code",
         "release_notes_diff",
         "home_feed",
+        "membership_info",
+        "document_details",
+        "document_structure_suggestions",
+        "request_purchases",
     }
 )
 
@@ -555,19 +559,19 @@ async def test_named_typed_get_contract(case: ReadCase) -> None:
         assert "2026-10" in doc
 
 
-@pytest.mark.parametrize(
-    ("name", "evidence"),
-    [
-        ("membership_info", "404"),
-        ("membership_savings", "MEMBERSHIP_SAVINGS_NOT_FOUND"),
-    ],
-)
-def test_non_200_probe_results_recorded_without_promotion(name: str, evidence: str) -> None:
-    method = getattr(CasaApi, name)
+def test_non_200_probe_results_recorded_without_promotion() -> None:
+    method = CasaApi.membership_savings
     assert is_unverified(method)
     doc = method.__doc__ or ""
     assert "2026-10" in doc
-    assert evidence in doc
+    assert "MEMBERSHIP_SAVINGS_NOT_FOUND" in doc
+
+
+def test_membership_info_promoted_with_404_caveat() -> None:
+    method = CasaApi.membership_info
+    assert not is_unverified(method)
+    doc = method.__doc__ or ""
+    assert doc.startswith("VERIFIED") and "404" in doc
 
 
 async def test_referral_code_keeps_unverified_shapes_opaque() -> None:

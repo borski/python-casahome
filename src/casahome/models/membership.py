@@ -1,7 +1,7 @@
-"""Static membership summaries, not billing or lifecycle action contracts.
+"""Membership summaries, not billing or lifecycle action contracts.
 
-Fields inferred from the app.
-All fields and response linkage remain UNVERIFIED. Cents/seconds are retained
+The ``membership/info`` envelope is VERIFIED (live, 2026-10) for an active
+membership. Savings remain static and UNVERIFIED. Cents/seconds are retained
 as named, without inventing a reporting period, currency or timezone.
 """
 
@@ -20,6 +20,13 @@ class MembershipBenefit(CasaModel):
 
 
 class MembershipDetails(CasaModel):
+    """Top-level keys VERIFIED (live, 2026-10) for an active membership.
+
+    The billing-period fields accept epoch integers or strings, since their
+    encoding isn't pinned. All newer keys are optional so other membership
+    states still parse.
+    """
+
     name: str
     amount: str
     amount_cents: int | None = None
@@ -27,6 +34,12 @@ class MembershipDetails(CasaModel):
     next_billing_date: int | None = None
     member_since: int | None = None
     benefits: list[MembershipBenefit] | None = None
+    status: str | None = None
+    cancel_at_period_end: bool | None = None
+    current_period_start: int | str | None = None
+    current_period_end: int | str | None = None
+    stripe_customer_id: str | None = None
+    stripe_subscription_id: str | None = None
 
 
 class MembershipSavingsSummary(CasaModel):

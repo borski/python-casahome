@@ -1,4 +1,8 @@
-"""Requests tab, request threads, and vendor visit models (UNVERIFIED endpoints)."""
+"""Requests tab, request threads, and vendor visit models.
+
+Request cards and request details are VERIFIED (live, 2026-10). Vendor visit
+models remain static.
+"""
 
 from __future__ import annotations
 
@@ -36,6 +40,7 @@ class RequestCard(CasaModel):
     pending_invoice_count: int = 0
     pending_purchase_count: int = 0
     pending_schedule_prompt_count: int = 0
+    ready_to_review_availability_count: int = 0
     concierge_awaiting_reply: bool = False
     vendor_visits: list[Any] = Field(default_factory=list)
 
@@ -98,6 +103,8 @@ class RequestMessage(CasaModel):
     created_at: int
     sender_role: SenderRoleField
     sender_name: str
+    sender_avatar_url: str | None = None
+    sender_avatar_cache_key: str | None = None
     content: str | None = None
     attachments: list[Any] = Field(default_factory=list)
     scheduling_prompt: Any | None = None
@@ -110,6 +117,14 @@ class RequestMessage(CasaModel):
         return epoch_to_dt(self.created_at)
 
 
+class RequestSummary(CasaModel):
+    """Request totals. ``total_spent`` is an integer amount, ``*_display`` is formatted."""
+
+    scheduled_visit_count: int | None = None
+    total_spent: int | None = None
+    total_spent_display: str | None = None
+
+
 class RequestDetails(CasaModel):
     id: str
     type: RequestTypeField
@@ -119,7 +134,7 @@ class RequestDetails(CasaModel):
     created_at: int
     updated_at: int
     has_unread_messages: bool = False
-    summary: dict[str, Any] = Field(default_factory=dict)
+    summary: RequestSummary = Field(default_factory=RequestSummary)
     messages: list[RequestMessage] = Field(default_factory=list)
     visits: list[Any] = Field(default_factory=list)
     invoices: list[Any] = Field(default_factory=list)

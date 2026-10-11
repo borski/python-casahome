@@ -1,0 +1,532 @@
+"""Writes VERIFIED against live app traffic (2026-10).
+
+Each method's docstring records what was observed: method, path, request body
+and response. ``CasaApi`` inherits these, so call them as ``api.method(...)``.
+
+Every write is sent once. The ID token is force-refreshed first and an HTTP 401
+raises ``CasaAuthError`` without a retry, since the server may already have
+acted. Inputs are validated before any I/O and rejected with a scrubbed
+``CasaRequestError`` that never echoes the input.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import mimetypes
+import os
+import re
+import uuid
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import date, datetime
+from pathlib import Path
+from typing import Any, Literal
+
+from pydantic import BaseModel, JsonValue, ValidationError
+
+from casahome._common import _parse, _write_home, _write_id, unverified
+from casahome.client import CasaClient
+from casahome.exceptions import CasaRequestError, CasaResponseError
+from casahome.models.ai import CasaAIFeedbackResponse, CasaAISendMessageResponse
+from casahome.models.documents import (
+    CreateDocumentResponse,
+    DocumentTypesResponse,
+    DocumentUploadSessionsResponse,
+)
+from casahome.models.mailbox import MailboxClaimResponse
+from casahome.models.preferences import AccessPreferencesResponse, NotificationSettingsResponse
+from casahome.models.read_todos import TodoDetailsResponse
+from casahome.models.verified_writes import (
+    AnswerTodoQuestionRequest,
+    CreateDocumentRequest,
+    CreateDocumentUploadSessionRequest,
+    DocumentUploadFile,
+    MaterializeTodoRequest,
+    MultiSelectAnswer,
+    MultiSelectRoundAnswer,
+    NotificationSettingUpdate,
+    RateCasaAIMessageRequest,
+    RespondToSuggestedTodoRequest,
+    SendCasaAIMessageRequest,
+    SingleSelectAnswer,
+    SingleSelectRoundAnswer,
+    SubmitQuestionRoundRequest,
+    UpdateAccessPreferencesRequest,
+    UpdateAutopilotPlanRequest,
+    UpdateNotificationSettingsRequest,
+)
+from casahome.models.write_contracts import BasicMessageResponse
+from casahome.uploads import put_storage_bytes
+
+_IDEMPOTENCY_KEY = re.compile(r"[\x21-\x7e]{1,255}")
+
+
+@dataclass(frozen=True)
+class SentCasaAIMessage:
+    """Result of ``send_ai_message``.
+
+    ``idempotency_key`` is the ``Idempotency-Key`` header that was sent. Reuse
+    it to resend the same message safely after a timeout or connection error.
+    """
+
+    idempotency_key: str
+    response: CasaAISendMessageResponse
+
+
+def _body(schema: type[BaseModel], data: Mapping[str, Any], *, exclude_none: bool) -> Any:
+    """Validate a request body and JSON-encode it, raising a scrubbed error."""
+    try:
+        validated = schema.model_validate(data)
+    except ValidationError as err:
+        message = f"Invalid {schema.__name__} write body: {err.error_count()} validation error(s)"
+    else:
+        return validated.model_dump(mode="json", exclude_none=exclude_none)
+    # Raised outside the handler. Pydantic errors echo the rejected input.
+    raise CasaRequestError(message)
+
+
+def _sequence(value: Sequence[Any], name: str) -> list[Any]:
+    """Reject a bare string, which would otherwise split into characters."""
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise CasaRequestError(f"{name} must be a list, not a string")
+    return list(value)
+
+
+def _idempotency_key(value: str | None) -> str:
+    if value is None:
+        return str(uuid.uuid4())
+    if not isinstance(value, str) or not _IDEMPOTENCY_KEY.fullmatch(value):
+        raise CasaRequestError("idempotency_key must be 1-255 visible ASCII characters")
+    return value
+
+
+def _filename(value: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or len(value) > 1024
+        or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in value)
+    ):
+        raise CasaRequestError("filename must be 1-1024 characters without control characters")
+    return value
+
+
+class VerifiedWritesMixin:
+    """Live-verified write methods. Mixed into ``CasaApi``."""
+
+    client: CasaClient
+
+    # Inventory ---------------------------------------------------------------
+
+    async def move_entity_to_room(
+        self, home_id: str, entity_id: str, room_id: str
+    ) -> BasicMessageResponse:
+        """VERIFIED (live, 2026-10). Move an inventory item to another room.
+
+        Observed ``POST /protected/member/home/{home_id}/entity/{entity_id}/room/{room_id}``
+        with no body, answered HTTP 200 ``{"message": str}``. The server replaces
+        the entity's room: afterwards the entity is only in the new room.
+        """
+        entity, room = _write_id(entity_id), _write_id(room_id)
+        path = f"{_write_home(home_id, member=True)}/entity/{entity}/room/{room}"
+        return _parse(BasicMessageResponse, await self.client.post(path))
+
+    # Casa AI -----------------------------------------------------------------
+
+    async def send_ai_message(
+        self,
+        home_id: str,
+        text: str,
+        *,
+        upload_ids: Sequence[str] = (),
+        idempotency_key: str | None = None,
+    ) -> SentCasaAIMessage:
+        """VERIFIED (live, 2026-10). Send a message to Casa AI.
+
+        Observed ``POST /protected/home/{home_id}/casa_ai/messages`` with an
+        ``Idempotency-Key`` header and body ``{"input": {"type": "message",
+        "text": str, "upload_ids": [str]}}``, answered HTTP 202 with
+        ``member_message`` and ``active_response``. The assistant's reply
+        arrives on ``casa_ai_events``, not in this response.
+
+        ``text`` must be 1-10,000 characters. A fresh UUID4 key is generated
+        when ``idempotency_key`` is None. The key used is returned so a caller
+        can resend after a transport failure without duplicating the message.
+        That server-side dedup behavior is assumed from the header, not tested.
+        """
+        path = f"{_write_home(home_id)}/casa_ai/messages"
+        key = _idempotency_key(idempotency_key)
+        payload = _body(
+            SendCasaAIMessageRequest,
+            {"input": {"text": text, "upload_ids": _sequence(upload_ids, "upload_ids")}},
+            exclude_none=True,
+        )
+        data = await self.client.request(
+            "POST", path, json=payload, headers={"Idempotency-Key": key}
+        )
+        return SentCasaAIMessage(key, _parse(CasaAISendMessageResponse, data))
+
+    async def rate_ai_message(
+        self, home_id: str, message_id: str, rating: Literal["good", "bad"]
+    ) -> CasaAIFeedbackResponse:
+        """VERIFIED (live, 2026-10). Thumbs up or down on an assistant message.
+
+        Observed ``PUT /protected/home/{home_id}/casa_ai/messages/{message_id}/feedback``
+        with ``{"rating": "good"|"bad"}``, answered HTTP 200 ``{"success": bool,
+        "feedback": {"rating": str}}``.
+        """
+        path = f"{_write_home(home_id)}/casa_ai/messages/{_write_id(message_id)}/feedback"
+        payload = _body(RateCasaAIMessageRequest, {"rating": rating}, exclude_none=True)
+        return _parse(CasaAIFeedbackResponse, await self.client.put(path, json=payload))
+
+    @unverified
+    async def clear_ai_message_rating(self, home_id: str, message_id: str) -> JsonValue:
+        """Remove a rating from an assistant message.
+
+        ``DELETE`` on the same path as ``rate_ai_message``, from static app
+        evidence only. The response shape is unknown, so the decoded JSON is
+        returned as-is (None for an empty body).
+        """
+        path = f"{_write_home(home_id)}/casa_ai/messages/{_write_id(message_id)}/feedback"
+        result: JsonValue = await self.client.delete(path)
+        return result
+
+    # To-dos ------------------------------------------------------------------
+
+    async def answer_todo_question(
+        self,
+        home_id: str,
+        todo_id: str,
+        round_id: str,
+        question_id: str,
+        *,
+        answer: SingleSelectAnswer | MultiSelectAnswer | None = None,
+        skip: bool = False,
+    ) -> None:
+        """VERIFIED (live, 2026-10) for answers. Save one question's answer.
+
+        Observed ``PUT /protected/home/{home_id}/todos/{todo_id}/question_rounds/
+        {round_id}/questions/{question_id}/answer`` with ``{"is_skipped": false,
+        "answer": {"kind": "single_select", "other_text": null,
+        "selected_option_index": 0}}`` (or ``multi_select`` with
+        ``selected_option_indexes``), answered HTTP 204 with no body.
+
+        Pass exactly one of ``answer`` or ``skip=True``. Skipping sends
+        ``{"is_skipped": true, "answer": null}``. That skip body is UNVERIFIED:
+        only answered questions were observed.
+
+        This saves the answer. ``submit_todo_question_round`` sends the round.
+        """
+        if not isinstance(skip, bool):
+            raise CasaRequestError("skip must be a bool")
+        if skip == (answer is not None):
+            raise CasaRequestError("pass exactly one of answer or skip=True")
+        path = (
+            f"{_write_home(home_id)}/todos/{_write_id(todo_id)}"
+            f"/question_rounds/{_write_id(round_id)}/questions/{_write_id(question_id)}/answer"
+        )
+        payload = _body(
+            AnswerTodoQuestionRequest, {"is_skipped": skip, "answer": answer}, exclude_none=False
+        )
+        await self.client.put(path, json=payload)
+
+    async def submit_todo_question_round(
+        self,
+        home_id: str,
+        todo_id: str,
+        round_id: str,
+        answers: Sequence[SingleSelectRoundAnswer | MultiSelectRoundAnswer],
+    ) -> TodoDetailsResponse:
+        """VERIFIED (live, 2026-10). Submit a round of answers.
+
+        Observed ``POST /protected/home/{home_id}/todos/{todo_id}/question_rounds/
+        {round_id}/answers`` with ``{"answers": [{"question_id": str,
+        "input_kind": "single_select", "selected_option_index": int,
+        "other_text": null}]}`` (``multi_select`` uses
+        ``selected_option_indexes``), answered HTTP 202 ``{"todo": ...}``.
+        """
+        path = (
+            f"{_write_home(home_id)}/todos/{_write_id(todo_id)}"
+            f"/question_rounds/{_write_id(round_id)}/answers"
+        )
+        payload = _body(
+            SubmitQuestionRoundRequest,
+            {"answers": _sequence(answers, "answers")},
+            exclude_none=False,
+        )
+        return _parse(TodoDetailsResponse, await self.client.post(path, json=payload))
+
+    async def respond_to_suggested_todo(
+        self, home_id: str, suggestion_id: str, decision: str
+    ) -> TodoDetailsResponse:
+        """VERIFIED (live, 2026-10) for ``decision="accept"``.
+
+        Observed ``POST /protected/home/{home_id}/suggested_todos/{suggestion_id}/respond``
+        with ``{"decision": "accept"}``, answered HTTP 202 ``{"todo": ...}``.
+        The value for declining wasn't observed, so ``decision`` is a plain
+        string. Use ``"accept"``. Other values are sent as given.
+        """
+        path = f"{_write_home(home_id)}/suggested_todos/{_write_id(suggestion_id)}/respond"
+        payload = _body(RespondToSuggestedTodoRequest, {"decision": decision}, exclude_none=True)
+        return _parse(TodoDetailsResponse, await self.client.post(path, json=payload))
+
+    async def materialize_todo(
+        self, home_id: str, todo_id: str, destination: str = "concierge"
+    ) -> TodoDetailsResponse:
+        """VERIFIED (live, 2026-10) for ``destination="concierge"``.
+
+        Observed ``POST /protected/home/{home_id}/todos/{todo_id}/materialize``
+        with ``{"destination": "concierge"}``, answered HTTP 201 ``{"todo": ...}``
+        whose ``destination`` became ``{"kind": "request", "id": ...}``. Other
+        destination values weren't observed.
+        """
+        path = f"{_write_home(home_id)}/todos/{_write_id(todo_id)}/materialize"
+        payload = _body(MaterializeTodoRequest, {"destination": destination}, exclude_none=True)
+        return _parse(TodoDetailsResponse, await self.client.post(path, json=payload))
+
+    async def send_todo_to_concierge(self, home_id: str, todo_id: str) -> TodoDetailsResponse:
+        """VERIFIED (live, 2026-10). Hand a to-do to the concierge as a request.
+
+        Same call as ``materialize_todo(home_id, todo_id, "concierge")``.
+        """
+        return await self.materialize_todo(home_id, todo_id, "concierge")
+
+    # Settings ----------------------------------------------------------------
+
+    async def update_autopilot_plan(
+        self,
+        home_id: str,
+        plan_id: str,
+        *,
+        enabled: bool,
+        selected_cadence: str,
+        next_desired_occurrence_date: date,
+        associations_enabled_map: Mapping[str, bool] | None = None,
+    ) -> BasicMessageResponse:
+        """VERIFIED (live, 2026-10). Update one Autopilot plan's settings.
+
+        Observed ``PATCH /protected/home/{home_id}/autopilot/{plan_id}`` with
+        ``{"next_desired_occurrence_date": "YYYY-MM-DD", "selected_cadence":
+        "every_quarter", "associations_enabled_map": {}, "enabled": bool}``,
+        answered HTTP 200 ``{"message": str}``. All four keys are always sent.
+        ``None`` for the map sends ``{}``, as observed. Whether ``{}`` leaves
+        existing associations unchanged is UNVERIFIED.
+        """
+        if isinstance(next_desired_occurrence_date, datetime):
+            raise CasaRequestError("next_desired_occurrence_date must be a date, not a datetime")
+        if associations_enabled_map is not None and not isinstance(
+            associations_enabled_map, Mapping
+        ):
+            raise CasaRequestError("associations_enabled_map must be a mapping")
+        path = f"{_write_home(home_id)}/autopilot/{_write_id(plan_id)}"
+        payload = _body(
+            UpdateAutopilotPlanRequest,
+            {
+                "next_desired_occurrence_date": next_desired_occurrence_date,
+                "selected_cadence": selected_cadence,
+                "associations_enabled_map": dict(associations_enabled_map or {}),
+                "enabled": enabled,
+            },
+            exclude_none=True,
+        )
+        return _parse(BasicMessageResponse, await self.client.patch(path, json=payload))
+
+    async def update_notification_settings(
+        self, home_id: str, settings: Sequence[NotificationSettingUpdate]
+    ) -> NotificationSettingsResponse:
+        """VERIFIED (live, 2026-10). Toggle notification type/channel pairs.
+
+        Observed ``PUT /protected/home/{home_id}/notification_settings`` with
+        ``{"settings": [{"notification_type": str, "channel": "push",
+        "enabled": bool}]}``, answered HTTP 200 with the full grouped settings
+        (same shape as ``notification_settings``). Only listed pairs were sent.
+        """
+        path = f"{_write_home(home_id)}/notification_settings"
+        payload = _body(
+            UpdateNotificationSettingsRequest,
+            {"settings": _sequence(settings, "settings")},
+            exclude_none=True,
+        )
+        return _parse(NotificationSettingsResponse, await self.client.put(path, json=payload))
+
+    async def update_access_preferences(
+        self,
+        home_id: str,
+        *,
+        general_instructions: str | None,
+        package_pickup_method: str | None,
+        package_pickup_spot: str | None,
+        package_pickup_general_instructions: str | None,
+    ) -> AccessPreferencesResponse:
+        """VERIFIED (live, 2026-10). Set home access and package pickup notes.
+
+        Observed ``PATCH /protected/home/{home_id}/access_preferences`` with all
+        four keys (``package_pickup_method`` seen as ``pickup_spot``,
+        ``package_pickup_spot`` as ``other``), answered HTTP 200 with the same
+        shape as ``access_preferences``. Every key is required here and
+        ``None`` is sent as ``null``. Whether ``null`` clears a value or
+        leaves it unchanged is UNVERIFIED.
+        """
+        path = f"{_write_home(home_id)}/access_preferences"
+        payload = _body(
+            UpdateAccessPreferencesRequest,
+            {
+                "general_instructions": general_instructions,
+                "package_pickup_method": package_pickup_method,
+                "package_pickup_spot": package_pickup_spot,
+                "package_pickup_general_instructions": package_pickup_general_instructions,
+            },
+            exclude_none=False,
+        )
+        return _parse(AccessPreferencesResponse, await self.client.patch(path, json=payload))
+
+    async def claim_mailbox(self, home_id: str) -> MailboxClaimResponse:
+        """VERIFIED (live, 2026-10). Claim the home's Casa mailbox.
+
+        Observed ``POST /protected/home/{home_id}/mailbox/claim`` with no body,
+        answered HTTP 200 ``{"mailbox": {...}}`` with id, status, onboarding
+        status, address and the other ``MemberMailbox`` fields.
+        """
+        path = f"{_write_home(home_id)}/mailbox/claim"
+        return _parse(MailboxClaimResponse, await self.client.post(path))
+
+    # Documents ---------------------------------------------------------------
+
+    async def create_document_upload_sessions(
+        self, home_id: str, files: Sequence[DocumentUploadFile]
+    ) -> DocumentUploadSessionsResponse:
+        """VERIFIED (live, 2026-10). Upload step 1: reserve upload slots.
+
+        Observed ``POST /protected/home/{home_id}/documents/sessions`` with
+        ``{"files": [{"size_bytes": int, "mimetype": str}]}``, answered HTTP 200
+        ``{"uploads": [{"upload_id": str, "session_url": str}]}``. Each
+        ``session_url`` is a signed Cloud Storage URL. Treat it as a secret.
+        """
+        path = f"{_write_home(home_id)}/documents/sessions"
+        payload = _body(
+            CreateDocumentUploadSessionRequest,
+            {"files": _sequence(files, "files")},
+            exclude_none=True,
+        )
+        data = await self.client.post(path, json=payload)
+        return _parse(DocumentUploadSessionsResponse, data)
+
+    async def upload_document_content(self, session_url: str, data: bytes, mimetype: str) -> None:
+        """VERIFIED (live, 2026-10). Upload step 2: send the file bytes.
+
+        Observed ``PUT`` to the ``session_url`` from step 1 (an
+        ``https://storage.googleapis.com/...`` resumable upload URL) with the
+        raw bytes and ``Content-Type``, ``Content-Length`` and ``Content-Range:
+        bytes 0-{n-1}/{n}``, answered HTTP 200.
+
+        Only https URLs on storage.googleapis.com are accepted. No Casa
+        credentials or app headers are sent. One attempt, no redirects. The
+        whole file goes in one request, so it's held in memory.
+        """
+        if not isinstance(mimetype, str) or not mimetype or len(mimetype) > 128:
+            raise CasaRequestError("mimetype must be a nonempty string")
+        await put_storage_bytes(
+            self.client._session, session_url, data, mimetype, timeout=self.client._timeout
+        )
+
+    async def create_document(
+        self,
+        home_id: str,
+        upload_id: str,
+        original_filename: str,
+        *,
+        find_todos: bool = True,
+    ) -> CreateDocumentResponse:
+        """VERIFIED (live, 2026-10). Upload step 3: register the uploaded file.
+
+        Observed ``POST /protected/home/{home_id}/documents`` with
+        ``{"find_todos": bool, "upload_id": str, "original_filename": str}``,
+        answered HTTP 201 ``{"document": {...}, "already_exists": bool}``.
+        ``find_todos`` asks Casa to suggest to-dos from the document.
+        """
+        path = f"{_write_home(home_id)}/documents"
+        payload = _body(
+            CreateDocumentRequest,
+            {
+                "find_todos": find_todos,
+                "upload_id": upload_id,
+                "original_filename": _filename(original_filename),
+            },
+            exclude_none=True,
+        )
+        return _parse(CreateDocumentResponse, await self.client.post(path, json=payload))
+
+    async def upload_document(
+        self,
+        home_id: str,
+        source: bytes | str | os.PathLike[str],
+        filename: str,
+        mimetype: str | None = None,
+        *,
+        find_todos: bool = True,
+    ) -> CreateDocumentResponse:
+        """VERIFIED (live, 2026-10) flow. Upload one file as a home document.
+
+        Runs the three observed steps: ``create_document_upload_sessions``,
+        ``upload_document_content`` and ``create_document``. Before any write
+        it reads ``documents/types`` and checks the MIME type against
+        ``allowed_mimetypes`` and the size against ``max_file_size_bytes``.
+
+        ``source`` is the file content or a local path. ``mimetype`` is guessed
+        from ``filename`` when omitted. Each step is sent once. If a later step
+        fails, the earlier ones aren't undone. An unregistered upload is
+        simply never attached to a document.
+        """
+        home_id = _write_id(home_id)
+        filename = _filename(filename)
+        if not isinstance(source, (bytes, str, os.PathLike)):
+            raise CasaRequestError("source must be bytes or a file path")
+        if not isinstance(find_todos, bool):
+            raise CasaRequestError("find_todos must be a bool")
+        resolved = mimetype if mimetype is not None else mimetypes.guess_type(filename)[0]
+        if not resolved:
+            raise CasaRequestError("mimetype could not be guessed from filename")
+
+        policy = _parse(
+            DocumentTypesResponse,
+            await self.client.get(f"{_write_home(home_id)}/documents/types"),
+        )
+        if resolved not in policy.allowed_mimetypes:
+            raise CasaRequestError("mimetype is not an allowed document type")
+
+        if isinstance(source, bytes):
+            content = source
+        else:
+            content = await _read_bounded(Path(source), policy.max_file_size_bytes)
+        if not 0 < len(content) <= policy.max_file_size_bytes:
+            raise CasaRequestError("file must be nonempty and within max_file_size_bytes")
+
+        sessions = await self.create_document_upload_sessions(
+            home_id, [DocumentUploadFile(size_bytes=len(content), mimetype=resolved)]
+        )
+        if len(sessions.uploads) != 1:
+            raise CasaResponseError("Expected exactly one upload session")
+        upload = sessions.uploads[0]
+        await self.upload_document_content(upload.session_url, content, resolved)
+        return await self.create_document(
+            home_id, upload.upload_id, filename, find_todos=find_todos
+        )
+
+
+async def _read_bounded(path: Path, limit: int) -> bytes:
+    """Read a local file off the event loop, refusing oversized files first."""
+
+    def read() -> bytes | None:
+        try:
+            if path.stat().st_size > limit:
+                return None
+            return path.read_bytes()
+        except OSError:
+            return b""
+
+    content = await asyncio.to_thread(read)
+    if content is None:
+        raise CasaRequestError("file exceeds max_file_size_bytes")
+    if not content:
+        raise CasaRequestError("file could not be read or is empty")
+    return content

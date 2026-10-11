@@ -1,7 +1,9 @@
-"""Opt-in CasaAI SSE support. Payload and replay behavior remain UNVERIFIED.
+"""Opt-in CasaAI SSE support.
 
 The app uses GET, after plus Last-Event-ID, thread.update JSON, and a
-terminal resync_required event. Change discriminator values aren't known.
+terminal resync_required event. Live traffic (2026-10) confirmed the transport,
+replay from an earlier cursor, and thread.update payloads carrying
+``message.upsert`` changes. resync_required and other change types weren't seen.
 Nothing in an event is executed, fetched, or treated as an instruction.
 """
 
@@ -17,9 +19,11 @@ from typing import Literal, TypeVar, cast
 import aiohttp
 from pydantic import JsonValue
 
+from ._common import _parse
 from .client import CasaClient
 from .const import CASA_APP, CASA_APP_VERSION, USER_AGENT
 from .exceptions import CasaApiError, CasaAuthError, CasaConnectionError, CasaResponseError
+from .models.ai import CasaAIThreadUpdate
 
 MAX_EVENT_BYTES = 256 * 1024
 MAX_LINE_BYTES = 64 * 1024
@@ -43,10 +47,21 @@ class ServerSentEvent:
 
 @dataclass(frozen=True)
 class CasaAIThreadUpdateEvent(ServerSentEvent):
-    """thread.update with JSON preserved without guessing nested wire variants."""
+    """thread.update with the decoded JSON kept as ``payload``.
+
+    Call ``update()`` for the typed form. ``payload`` stays the fallback for
+    anything the typed model doesn't cover.
+    """
 
     event: Literal["thread.update"]
     payload: JsonValue
+
+    def update(self) -> CasaAIThreadUpdate:
+        """Typed payload. Raises a scrubbed CasaResponseError on schema drift.
+
+        Unknown change types parse as ``CasaAIUnknownChange`` and don't fail.
+        """
+        return _parse(CasaAIThreadUpdate, self.payload)
 
 
 @dataclass(frozen=True)
@@ -64,8 +79,9 @@ def unverified_stream(func: _F) -> _F:
     """Mark an async generator without changing its identity or coroutine markers."""
     func.__casa_unverified__ = True  # type: ignore[attr-defined]
     func.__doc__ = (
-        "UNVERIFIED: payload decoding and replay behavior aren't established against live data. "
-        "Live traffic (2026-10) confirmed GET/SSE transport only.\n\n" + (func.__doc__ or "")
+        "UNVERIFIED (partial): live traffic (2026-10) confirmed GET/SSE transport, replay "
+        "from an earlier cursor, and thread.update with message.upsert changes. "
+        "resync_required and other change types aren't established.\n\n" + (func.__doc__ or "")
     ).rstrip()
     return func
 

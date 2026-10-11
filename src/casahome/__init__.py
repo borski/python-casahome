@@ -11,8 +11,9 @@ from .exceptions import (
     CasaRequestError,
     CasaResponseError,
 )
+from .writes import SentCasaAIMessage
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "CasaApi",
@@ -24,6 +25,7 @@ __all__ = [
     "CasaRequestError",
     "CasaResponseError",
     "FirebaseAuth",
+    "SentCasaAIMessage",
     "TokenResponse",
     "__version__",
     "is_unverified",

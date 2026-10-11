@@ -1,11 +1,17 @@
-"""Document envelopes observed empty. Item schemas are static and UNVERIFIED."""
+"""Documents, thumbnails, and the three-step upload flow.
 
-from pydantic import Field
+Document item, detail, thumbnail and upload shapes are VERIFIED (live, 2026-10).
+Suggestion item schemas are static and UNVERIFIED.
+"""
+
+from pydantic import Field, StrictBool
 
 from casahome.models._base import CasaModel
 
 
 class DocumentOrganization(CasaModel):
+    """Background organization job. ``status`` seen as queued, running, completed."""
+
     id: str | None = None
     status: str | None = None
     error_code: str | None = None
@@ -22,6 +28,12 @@ class DocumentExtraction(DocumentOrganization):
 
 
 class HomeDocument(CasaModel):
+    """Populated item VERIFIED (live, 2026-10).
+
+    ``document_type`` seen as ``other`` and ``inspection_report``.
+    ``document_date`` is ``YYYY-MM-DD`` or null. Timestamps are epoch seconds.
+    """
+
     id: str | None = None
     home_id: str | None = None
     original_filename: str | None = None
@@ -77,7 +89,7 @@ class WorkDocumentSourceResponse(CasaModel):
 
 
 class DocumentDetailsResponse(CasaModel):
-    """UNVERIFIED document detail envelope."""
+    """Document detail envelope. VERIFIED (live, 2026-10)."""
 
     document: HomeDocument
 
@@ -122,6 +134,42 @@ class DocumentStructureSuggestion(CasaModel):
 
 
 class DocumentStructureSuggestionsResponse(CasaModel):
-    """UNVERIFIED structure suggestion page."""
+    """Envelope VERIFIED (live, 2026-10), observed empty. Item fields are static."""
 
     suggestions: list[DocumentStructureSuggestion]
+
+
+class DocumentThumbnailResponse(CasaModel):
+    """Signed preview URLs. VERIFIED (live, 2026-10).
+
+    The URLs are short-lived credentials (``expires_at`` epoch seconds). Don't
+    log or persist them. The library never fetches them.
+    """
+
+    url: str
+    expires_at: int
+    preview_pages: list[str] = Field(default_factory=list)
+    page_count_url: str | None = None
+
+
+class DocumentUploadSession(CasaModel):
+    """One upload slot. ``session_url`` is a signed Cloud Storage upload URL."""
+
+    upload_id: str
+    session_url: str
+
+
+class DocumentUploadSessionsResponse(CasaModel):
+    """One session per requested file, in request order. VERIFIED (live, 2026-10)."""
+
+    uploads: list[DocumentUploadSession]
+
+
+class CreateDocumentResponse(CasaModel):
+    """HTTP 201 body from registering an upload. VERIFIED (live, 2026-10).
+
+    ``already_exists`` is true when Casa matched the file to an existing document.
+    """
+
+    document: HomeDocument
+    already_exists: StrictBool
