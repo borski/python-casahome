@@ -72,8 +72,9 @@ _IDEMPOTENCY_KEY = re.compile(r"[\x21-\x7e]{1,255}")
 class SentCasaAIMessage:
     """Result of ``send_ai_message``.
 
-    ``idempotency_key`` is the ``Idempotency-Key`` header that was sent. Reuse
-    it to resend the same message safely after a timeout or connection error.
+    ``idempotency_key`` is the ``Idempotency-Key`` header that was sent.
+    Server deduplication hasn't been tested. After a timeout or connection
+    error, check the thread before deciding whether to resend anything.
     """
 
     idempotency_key: str
@@ -189,9 +190,10 @@ class VerifiedWritesMixin:
         arrives on ``casa_ai_events``, not in this response.
 
         ``text`` must be 1-10,000 characters. A fresh UUID4 key is generated
-        when ``idempotency_key`` is None. The key used is returned so a caller
-        can resend after a transport failure without duplicating the message.
-        That server-side dedup behavior is assumed from the header, not tested.
+        when ``idempotency_key`` is None. The key used is returned for tracing
+        and caller-controlled recovery, not as a guarantee that retries are safe.
+        Server-side deduplication hasn't been tested. A failed send may have
+        succeeded, so check the thread before considering another attempt.
         """
         path = f"{_write_home(home_id)}/casa_ai/messages"
         key = _idempotency_key(idempotency_key)
