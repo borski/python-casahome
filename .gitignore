@@ -9,5 +9,9 @@ build/
 .ruff_cache/
 .coverage
 .env
+.env.*
+!.env.example
 *.har
+traffic/
+*.local.*
 working/
