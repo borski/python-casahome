@@ -42,7 +42,7 @@ class HomeDocument(CasaModel):
     document_type: str | None = None
     document_date: str | None = None
     mimetype: str | None = None
-    size_bytes: int | None = None
+    size_bytes: StrictInt | None = None
     uploaded_by_name: str | None = None
     created_at: int | None = None
     updated_at: int | None = None
@@ -141,7 +141,7 @@ class DocumentStructureSuggestion(CasaModel):
     proposed_label: str
     reason: str
     state: str
-    changed_since_analysis: bool
+    changed_since_analysis: StrictBool
     responded_at: StrictInt | None = None
     citations: list[DocumentCitation]
 

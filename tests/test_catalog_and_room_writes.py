@@ -1,7 +1,8 @@
 """Make/model catalog selections, room rename and snake_case API errors.
 
-Synthetic data only, against the loopback FakeServer. Contracts come from a
-private capture analyzed elsewhere (2026-10). Nothing here reads it.
+Synthetic data only, against the loopback FakeServer. These tests check local
+serialization and parsing, not live acceptance or traffic provenance. Model-ID
+selection and nullable publish fields have static codec evidence only.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from casahome import CasaApi, CasaApiError, CasaAuthError, CasaRequestError
+from casahome import CasaApi, CasaApiError, CasaAuthError, CasaRequestError, CasaResponseError
 from casahome.client import _api_error
 from casahome.models import (
     BasicMessageResponse,
@@ -23,6 +24,7 @@ from casahome.models import (
     EntityModelName,
     RenameRoomRequest,
     SaveAndPublishEntityRequest,
+    SaveAndPublishEntityResponse,
 )
 from tests.conftest import HOME_ID, TOKEN_PATH, FakeServer
 from tests.test_observed_contracts import ENTITY_ID, PUBLISH_PATH, PUBLISHED
@@ -133,6 +135,68 @@ async def test_save_and_publish_accepts_typed_selections(api: CasaApi, server: F
 def test_entity_model_name_still_accepted() -> None:
     body = SaveAndPublishEntityRequest(model=EntityModelName(name="Example"), props=[])
     assert body.model_dump(exclude_none=True) == {"model": {"name": "Example"}, "props": []}
+
+
+@pytest.mark.parametrize(
+    "method", ["save_and_publish_entity", "update_entity_model", "update_entity_make_model"]
+)
+@pytest.mark.parametrize("make_state", ["missing", "null", "populated"])
+@pytest.mark.parametrize("model_state", ["missing", "null", "populated"])
+async def test_publish_optional_catalog_fields(
+    api: CasaApi, server: FakeServer, method: str, make_state: str, model_state: str
+) -> None:
+    payload = {**PUBLISHED, "future_field": ["synthetic"]}
+    for field, state in (("make", make_state), ("model", model_state)):
+        if state == "missing":
+            del payload[field]
+        elif state == "null":
+            payload[field] = None
+    server.add("POST", PUBLISH_PATH, payload=payload)
+    kwargs: dict[str, Any] = (
+        {"body": SaveAndPublishEntityRequest(model=EntityModelName(name="Example"), props=[])}
+        if method == "save_and_publish_entity"
+        else {"model_name": "Example"}
+    )
+    result = await getattr(api, method)(HOME_ID, ENTITY_ID, **kwargs)
+    assert isinstance(result, SaveAndPublishEntityResponse)
+    assert result.entity_id == ENTITY_ID
+    assert result.status == "published"
+    assert result.identity.state == "verified"
+    for field, state in (("make", make_state), ("model", model_state)):
+        value = getattr(result, field)
+        if state == "populated":
+            assert value is not None and value.model_dump(exclude_unset=True) == PUBLISHED[field]
+        else:
+            assert value is None
+    assert result.model_extra == {"future_field": ["synthetic"]}
+    (call,) = server.calls("POST", PUBLISH_PATH)
+    assert json.loads(call.body) == {"model": {"name": "Example"}, "props": []}
+
+
+@pytest.mark.parametrize("field", ["entity_id", "status", "identity"])
+@pytest.mark.parametrize("state", ["missing", "null"])
+def test_optional_catalog_fields_dont_mask_required_response_fields(field: str, state: str) -> None:
+    payload = {**PUBLISHED, "make": None, "model": None}
+    if state == "missing":
+        del payload[field]
+    else:
+        payload[field] = None
+    with pytest.raises(ValidationError) as caught:
+        SaveAndPublishEntityResponse.model_validate(payload)
+    assert {error["loc"] for error in caught.value.errors()} == {(field,)}
+
+
+@pytest.mark.parametrize("field", ["make", "model"])
+@pytest.mark.parametrize("value", [[], "invalid", {"id": "synthetic", "name": {"secret": CANARY}}])
+async def test_optional_catalog_fields_still_reject_malformed_values_once(
+    api: CasaApi, server: FakeServer, field: str, value: Any
+) -> None:
+    server.add("POST", PUBLISH_PATH, payload={**PUBLISHED, field: value})
+    with pytest.raises(CasaResponseError) as caught:
+        await api.update_entity_make_model(HOME_ID, ENTITY_ID, model_name="Example")
+    assert caught.value.__context__ is None
+    assert CANARY not in "".join(traceback.format_exception(caught.value))
+    assert len(server.calls("POST", PUBLISH_PATH)) == 1
 
 
 @pytest.mark.parametrize(

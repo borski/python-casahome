@@ -5,7 +5,9 @@ Task-item and conversation-part unions stay opaque JSON, not guessed tags.
 The older requests.VendorVisit stays unchanged for compatibility.
 """
 
-from pydantic import JsonValue
+from typing import Any
+
+from pydantic import Field, JsonValue, field_validator
 
 from casahome.models._base import CasaModel
 from casahome.models.images import MediaAttachment
@@ -101,7 +103,13 @@ class VisitConversationMessage(CasaModel):
     is_mine: bool
     content: str | None = None
     attachments: list[MediaAttachment]
-    parts: list[JsonValue]
+    parts: list[JsonValue] = Field(default_factory=list)
+
+    @field_validator("parts", mode="before")
+    @classmethod
+    def nil_parts_as_empty(cls, value: Any) -> Any:
+        """Native decodeIfPresent maps an absent or null parts array to []."""
+        return [] if value is None else value
 
 
 class VisitConversation(CasaModel):

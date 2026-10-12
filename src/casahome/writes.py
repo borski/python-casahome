@@ -130,16 +130,19 @@ class VerifiedWritesMixin:
     async def save_and_publish_entity(
         self, home_id: str, entity_id: str, body: SaveAndPublishEntityRequest
     ) -> SaveAndPublishEntityResponse:
-        """VERIFIED for make/model id-or-name selections and empty props. Sent once.
+        """VERIFIED for the observed publish subset, not every selection. Sent once.
 
         Observed POST to the member-home entity's ``save_and_publish`` route
-        with optional ``make`` and ``model``, each ``{"id": str}`` or
-        ``{"name": str}``, and ``props: []``. Answered HTTP 200 with entity_id,
+        with ``model.name`` and ``props: []``. Shared compiled selection encoding
+        supports optional ``make`` and ``model``, each ``{"id": str}`` or
+        ``{"name": str}``. Model-ID traffic remains UNVERIFIED. Observed responses
+        answered HTTP 200 with entity_id,
         status="published", make, model and identity.state="verified". Names
         are matched against Casa's catalog. An unmatched name fails with HTTP
-        400 ``CasaApiError`` code ``CATALOG_MODEL_UNVERIFIED``. The clear
-        selection, nonempty props and props-only bodies are UNVERIFIED and
-        rejected. No entity refresh or second write is performed.
+        400 ``CasaApiError`` code ``CATALOG_MODEL_UNVERIFIED``. Static clear encoding
+        is explicit null, but server clearing semantics remain UNVERIFIED.
+        Clear selections, nonempty props and props-only bodies aren't supported.
+        No entity refresh or second write is performed.
         """
         path = f"{_write_home(home_id, member=True)}/entity/{_write_id(entity_id)}/save_and_publish"
         payload = _write_payload(body, SaveAndPublishEntityRequest)
@@ -166,19 +169,22 @@ class VerifiedWritesMixin:
         model_id: str | None = None,
         model_name: str | None = None,
     ) -> SaveAndPublishEntityResponse:
-        """VERIFIED (live, 2026-10). Set an item's make and/or model via save_and_publish.
+        """Set an item's make and/or model via save_and_publish, with scoped evidence.
 
         Pass at most one of ``make_id``/``make_name`` and at most one of
         ``model_id``/``model_name``, and at least one side overall. An omitted
         side isn't sent. The body always carries ``props: []``.
 
-        Both the ``{"id": ...}`` and ``{"name": ...}`` variants were observed
-        for make and model, answered HTTP 200 with the published entity and
-        ``identity.state="verified"``. Casa matches names against its catalog
+        Both the ``{"id": ...}`` and ``{"name": ...}`` variants are supported by
+        the shared compiled selection codec. That static evidence doesn't prove
+        every variant was observed in traffic. Model-ID traffic is UNVERIFIED.
+        Populated responses were observed with ``identity.state="verified"``.
+        Casa matches names against its catalog
         and may store a different canonical name, so read the returned
-        ``make.name`` and ``model.name``. A name it can't match raises
+        ``make.name`` and ``model.name`` when present. A name it can't match raises
         ``CasaApiError`` with status 400 and code ``CATALOG_MODEL_UNVERIFIED``.
-        Clearing a make or model isn't supported: its wire form is unknown.
+        Clearing isn't supported. Its compiled wire form is explicit null, but
+        server clearing semantics remain UNVERIFIED. ``None`` omits a side.
         """
         body: dict[str, Any] = {"props": []}
         for side, id_value, name_value in (

@@ -85,7 +85,9 @@ class CasaClient:
         could echo the private content that was sent.
         """
         retry = method == "GET" if retry_on_401 is None else retry_on_401
-        scrub = method != "GET"
+        # Preparation GETs can precede destructive writes. Don't reflect raw
+        # upstream bodies when callers explicitly choose single-attempt mode.
+        scrub = method != "GET" or not retry
         _LOGGER.debug("%s %s", method, path)
         if not retry:
             await self.auth.refresh()
@@ -148,8 +150,14 @@ class CasaClient:
         ):
             return resp.status, await resp.text(), token
 
-    async def get(self, path: str, *, params: Mapping[str, str] | None = None) -> Any:
-        return await self.request("GET", path, params=params)
+    async def get(
+        self,
+        path: str,
+        *,
+        params: Mapping[str, str] | None = None,
+        retry_on_401: bool = True,
+    ) -> Any:
+        return await self.request("GET", path, params=params, retry_on_401=retry_on_401)
 
     async def post(self, path: str, *, json: Any | None = None, retry_on_401: bool = False) -> Any:
         return await self.request("POST", path, json=json, retry_on_401=retry_on_401)

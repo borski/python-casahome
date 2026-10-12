@@ -174,8 +174,10 @@ class ProvisionalWorkflowMixin:
         availability_request_id: str,
         windows: Sequence[MemberAvailabilitySlotWindow],
     ) -> MemberAvailabilityDetail:
-        """PUT required integer slot windows once. Time units are UNVERIFIED.
+        """PUT required integer slot windows once. Server semantics are UNVERIFIED.
 
+        One compiled availability-editor caller uses integer Unix seconds,
+        truncated toward zero. This isn't server or all-caller verification.
         No datetime conversion or ordering, duration or overlap rules are
         invented. [] remains []. Replacement semantics and whether this also
         finalizes submission are UNVERIFIED. No separate submit is implied.

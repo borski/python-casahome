@@ -37,6 +37,7 @@ from casahome.models import (
     VendorVisitDetails,
     VisitCallsResponse,
     VisitConversation,
+    VisitConversationMessage,
 )
 
 H = "/protected/home/home-test"
@@ -522,8 +523,12 @@ VERIFIED_READS = frozenset(
 class ReadClient:
     payload: Any
     calls: list[tuple[str, dict[str, str]]] = field(default_factory=list)
+    retry_flags: list[bool] = field(default_factory=list)
 
-    async def get(self, path: str, *, params: dict[str, str] | None = None) -> Any:
+    async def get(
+        self, path: str, *, params: dict[str, str] | None = None, retry_on_401: bool = True
+    ) -> Any:
+        self.retry_flags.append(retry_on_401)
         self.calls.append((path, params or {}))
         return deepcopy(self.payload)
 
@@ -531,6 +536,18 @@ class ReadClient:
 def make_api(payload: Any) -> tuple[CasaApi, ReadClient]:
     client = ReadClient(payload)
     return CasaApi(cast(CasaClient, client), device_id="test-device"), client
+
+
+@pytest.mark.parametrize("name", ["document_details", "document_structure_suggestions"])
+async def test_document_read_retry_switch_is_keyword_only(name: str) -> None:
+    case = next(case for case in CASES if case.name == name)
+    api, client = make_api(case.payload)
+    method = getattr(api, name)
+    await method(*case.args)
+    await method(*case.args, retry_on_401=False)
+    assert client.retry_flags == [True, False]
+    with pytest.raises(TypeError):
+        await method(*case.args, False)
 
 
 @pytest.fixture(autouse=True)
@@ -701,6 +718,46 @@ async def test_opaque_visit_unions_and_future_statuses_preserved() -> None:
     assert conversation.messages[0].sender_role == "future-role"
     assert conversation.event_cursor == "synthetic/opaque+=?"
     assert len(client.calls) == 2
+
+
+@pytest.mark.parametrize("parts", ["missing", None, [], [OPAQUE]])
+async def test_vendor_conversation_parts_optional_only(
+    parts: Any,
+) -> None:
+    payload = deepcopy(CONVERSATION)
+    message = payload["messages"][0]
+    if parts == "missing":
+        del message["parts"]
+    else:
+        message["parts"] = parts
+    message["future_field"] = {"new": [1, None]}
+    model_message = VisitConversationMessage.model_validate(message)
+    assert model_message.parts == ([] if parts in ("missing", None) else parts)
+    assert model_message.model_extra == {"future_field": {"new": [1, None]}}
+    api, client = make_api(payload)
+    result = await api.vendor_visit_conversation("home-test", "visit-test")
+    assert result.messages[0].parts == model_message.parts
+    assert result.messages[0].model_extra == model_message.model_extra
+    assert client.calls == [(f"{H}/vendor_visits/visit-test/conversation", {})]
+
+
+@pytest.mark.parametrize("bad", [1, "text", {"not": "an array"}])
+async def test_vendor_conversation_rejects_malformed_nonnull_parts(bad: Any) -> None:
+    payload = deepcopy(CONVERSATION)
+    payload["messages"][0]["parts"] = bad
+    with pytest.raises(ValueError):
+        VisitConversationMessage.model_validate(payload["messages"][0])
+    api, _ = make_api(payload)
+    with pytest.raises(CasaResponseError):
+        await api.vendor_visit_conversation("home-test", "visit-test")
+
+
+def test_vendor_conversation_attachments_still_required() -> None:
+    message = deepcopy(CONVERSATION["messages"][0])
+    del message["attachments"]
+    del message["parts"]
+    with pytest.raises(ValueError):
+        VisitConversationMessage.model_validate(message)
 
 
 async def test_release_diff_sends_current_build() -> None:

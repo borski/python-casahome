@@ -538,7 +538,12 @@ def test_verified_writes_document_evidence(name: str) -> None:
     assert inspect.iscoroutinefunction(method)
     assert not is_unverified(method)
     doc = method.__doc__ or ""
-    assert doc.startswith("VERIFIED (live, 2026-10)")
+    if name == "update_entity_make_model":
+        # The existing method marker doesn't attest every input variant.
+        assert "shared compiled selection codec" in doc
+        assert "Model-ID traffic is UNVERIFIED" in doc
+    else:
+        assert doc.startswith("VERIFIED (live, 2026-10)")
 
 
 def test_clear_rating_stays_unverified() -> None:

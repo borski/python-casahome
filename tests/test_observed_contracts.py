@@ -109,6 +109,8 @@ async def test_publish_wire_and_typed_result(api: CasaApi, server: FakeServer, n
     assert isinstance(result, SaveAndPublishEntityResponse)
     assert result.entity_id == ENTITY_ID
     assert result.status == "published"
+    assert result.make is not None
+    assert result.model is not None
     assert result.make.name == "Example make"
     assert result.model.name == "Example model"
     assert result.identity.state == "verified"
@@ -260,7 +262,7 @@ async def test_copied_and_mutated_publish_body_revalidated(
 
 
 @pytest.mark.parametrize("name", ["save_and_publish_entity", "update_entity_model"])
-@pytest.mark.parametrize("missing", ["entity_id", "status", "make", "model", "identity"])
+@pytest.mark.parametrize("missing", ["entity_id", "status", "identity"])
 async def test_publish_response_required_fields_no_retry(
     api: CasaApi, server: FakeServer, name: str, missing: str
 ) -> None:

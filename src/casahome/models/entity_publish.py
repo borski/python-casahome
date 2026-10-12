@@ -1,9 +1,12 @@
-"""Inventory publish and room rename contracts observed in app traffic (2026-10).
+"""Inventory publish and room rename contracts with scoped evidence.
 
 ``save_and_publish`` takes an optional make and an optional model, each a
 catalog field selection. The app's ``CatalogFieldSelection`` has three cases:
-existing ``{"id": ...}`` and new ``{"name": ...}`` are VERIFIED for both make
-and model. The clear case's wire form wasn't recovered, so it isn't offered.
+existing ``{"id": ...}`` and new ``{"name": ...}`` have statically verified
+encoding for both make and model. That isn't traffic verification of every
+variant. In particular, model-ID traffic remains UNVERIFIED. The compiled clear
+case encodes explicit null, but server clearing semantics remain UNVERIFIED,
+so it isn't offered. SDK ``None`` means omission, not clear.
 Editable properties remain UNVERIFIED on this route, so ``props`` must be empty.
 """
 
@@ -51,13 +54,16 @@ _RoomName = Annotated[
 
 
 class CatalogFieldId(_WriteModel):
-    """Existing catalog entry, sent as ``{"id": ...}``. VERIFIED for make and model."""
+    """Existing catalog entry. Static ``{"id": ...}`` encoding for either side.
+
+    Model-ID traffic verification remains UNVERIFIED.
+    """
 
     id: _CatalogId
 
 
 class CatalogFieldName(_WriteModel):
-    """Free-text name, sent as ``{"name": ...}``. VERIFIED for make and model.
+    """Free-text name, sent as ``{"name": ...}`` for make or model.
 
     The server matches names against its catalog and may return a different
     canonical name. Unknown names fail with HTTP 400 ``CATALOG_MODEL_UNVERIFIED``.
@@ -100,13 +106,15 @@ class SaveAndPublishEntityResponse(CasaModel):
     Observed identity: ``state="verified"``, null ``unverified_make`` and
     ``unverified_model``, and empty ``candidates``. Existing catalog/identity
     models preserve unknown response fields. Populated candidates and other
-    status values remain UNVERIFIED.
+    status values remain UNVERIFIED. The compiled decoder permits missing or
+    null make/model fields. Tolerating those shapes isn't live verification.
+    The SDK's required entity_id, status and identity contract is retained.
     """
 
     entity_id: str
     status: str
-    make: EntityMake
-    model: EntityModel
+    make: EntityMake | None = None
+    model: EntityModel | None = None
     identity: EntityIdentity
 
 

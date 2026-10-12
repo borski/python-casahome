@@ -156,6 +156,17 @@ STILL_UNVERIFIED = frozenset(
         "create_inventory_entity",
         "create_inventory_lighting",
         "create_paint_from_library",
+        "update_request_detail",
+        "dismiss_document_structure_suggestion",
+        "update_task",
+        "delete_task",
+        "transfer_task_to_concierge",
+        "delete_document",
+        "update_room_properties",
+        "update_story",
+        "retailer_discounts",
+        "create_support_request",
+        "mark_vendor_visit_conversation_read",
     }
 )
 

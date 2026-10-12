@@ -82,8 +82,10 @@ class UpdateSchedulePreferencesRequest(_WriteModel):
 
 
 class MemberAvailabilitySlotWindow(_WriteModel):
-    """Required integer bounds. Units and ordering rules remain UNVERIFIED.
+    """Required integer bounds with statically scoped caller evidence.
 
+    One compiled availability editor converts dates to integer Unix seconds,
+    truncated toward zero. Server units and ordering rules remain UNVERIFIED.
     No datetime conversion, positivity, duration or overlap policy is inferred.
     """
 

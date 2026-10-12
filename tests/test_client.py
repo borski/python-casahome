@@ -155,8 +155,21 @@ async def test_explicit_retry_on_401_opt_in_for_post(
 async def test_get_can_opt_out_of_401_retry(server: FakeServer, client: CasaClient) -> None:
     server.add("GET", PATH, status=401)
     server.add("GET", PATH, payload={"ok": True})
-    with pytest.raises(CasaAuthError):
-        await client.request("GET", PATH, retry_on_401=False)
+    with pytest.raises(CasaAuthError) as error:
+        await client.get(PATH, retry_on_401=False)
+    assert len(server.calls("GET", PATH)) == 1
+    assert len(server.calls("POST", TOKEN_PATH)) == 1
+    assert "fake.id.token" not in str(error.value)
+
+
+async def test_single_attempt_get_does_not_expose_raw_error_body(
+    server: FakeServer, client: CasaClient
+) -> None:
+    server.add("GET", PATH, status=502, body="<html>private synthetic canary</html>")
+    with pytest.raises(CasaApiError) as error:
+        await client.get(PATH, retry_on_401=False)
+    assert error.value.display_message == ""
+    assert "canary" not in str(error.value)
     assert len(server.calls("GET", PATH)) == 1
 
 

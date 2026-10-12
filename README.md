@@ -193,7 +193,7 @@ traffic and the library sends the same body.
 |---|---|---|
 | `move_entity_to_room` | yes | Replaces the item's room. |
 | `rename_room` | yes | `PATCH` with `room_type_id` and `name`, both always sent. |
-| `save_and_publish_entity`, `update_entity_make_model`, `update_entity_model` | yes | Make and model each by `{"id"}` or `{"name"}`, empty `props`. Unknown names fail with `CATALOG_MODEL_UNVERIFIED`. No clear. |
+| `save_and_publish_entity`, `update_entity_make_model`, `update_entity_model` | partial | Observed publish subset includes `model.name` and empty `props`. Shared ID/name encoding is statically verified, not traffic verification of every variant. Model-ID traffic remains UNVERIFIED. No clear. |
 | `send_ai_message` | yes | Sends an `Idempotency-Key` and returns it. Reply arrives on the event stream. |
 | `rate_ai_message` | yes | `good` or `bad`. |
 | `answer_todo_question` | yes | Answers seen. The skip body is unverified. |
@@ -214,6 +214,33 @@ traffic and the library sends the same body.
 | `upload_document` | yes | All three steps, after checking the file against `document_types`. |
 | `clear_ai_message_rating` | no | Path from the app only. |
 | `update_entity_properties` | no | |
+
+### Offline reconstructed contracts
+
+The following SDK methods are **UNVERIFIED against Casa's backend**. Their
+request/response codecs were reconstructed from the compiled app. Synthetic
+loopback tests check serialization and parsing only. No MCP or Home Assistant
+tool is added by these SDK methods.
+
+| Method | Route beneath the home prefix | Result |
+|---|---|---|
+| `update_request_detail` | `PATCH requests/{id}` | Direct six-field `UpdateRequestDetailResponse`. Optional title/read_state (`read` or `unread`) are omitted when absent. |
+| `dismiss_document_structure_suggestion` | `POST documents/{id}/structure_suggestions/{id}/respond` | `SavedResponse`. Requires ordered caller-supplied `expected_values`, even when empty. The existing accepted-only method is unchanged. |
+| `update_task`, `delete_task`, `transfer_task_to_concierge` | `PATCH/DELETE tasks/{id}`, `POST tasks/{id}/transfer_to_concierge` | TaskDetails (scalar edits only), BasicMessageResponse, direct TransferToConciergeResponse. DELETE and transfer have no body. |
+| `delete_document` | `DELETE documents/{id}` | `HomeDocumentDeleteResponse.deleted`. False is retained on HTTP success. |
+| `update_room_properties` | `PATCH room/{id}/props` under the **member** home prefix | Required props list of definition_id plus optional string value. No enum or clear input. |
+| `update_story` | `PATCH story/{id}` under the **member** home prefix | Optional name/floor_number, BasicMessageResponse. |
+| `retailer_discounts` | `GET retailer_discounts` | Required `data` array with typed scalar items and preserved unknown fields. Never follows URLs. |
+| `create_support_request` | `POST support_requests` | Text-only, direct request_id. This may contact a person. No attachments. |
+| `mark_vendor_visit_conversation_read` | `PATCH vendor_visits/{id}/conversation/read` | Bodyless, required `ok` Boolean. False isn't treated as success. |
+
+Writes make a single attempt without 401 replay. A response parse failure after
+a write is an unknown outcome, not proof the write didn't happen. No implicit
+clearing, conflict retry, dispatch, booking or follow-up action is performed.
+Resource refresh needs raw response bytes rather than the current JSON-only
+client transport, so it isn't exposed. Mail detail, utility statements and
+vendor message sends need further nested response proof. Shopping, billing and
+credential operations remain excluded.
 
 ## Models
 
@@ -261,11 +288,16 @@ backend. Nothing is sent until you await a write method.
   model_id=, model_name=)` builds the same body: at most one of id or name per
   side, at least one side. `update_entity_model(home_id, entity_id, model_name)`
   is the model-name-only shortcut. All return `SaveAndPublishEntityResponse`,
-  including make, model and identity. Casa matches names against its catalog
+  including optional make/model and required identity, entity_id and status.
+  Missing or null make/model fields are accepted based on the compiled decoder,
+  not a claim of observed server responses. Casa matches names against its catalog
   and may store a different canonical name. An unmatched name raises
   `CasaApiError` with status 400 and code `CATALOG_MODEL_UNVERIFIED`. Names
   are capped at 256 characters and can't be blank. Clearing a make or model
-  isn't supported because its wire form is unknown. Nonempty props are
+  isn't supported. The compiled clear case encodes explicit null, but its server
+  semantics remain UNVERIFIED. SDK `None` omits a side and never clears it.
+  Model-ID selection has static codec evidence only, not verified traffic.
+  Nonempty props are
   rejected. The older property PATCH is still unverified.
 - `rename_room(home_id, room_id, *, room_type_id, name)` sends both keys. Pass
   the room's current `room_type_id` (from `home_details`) to keep its type.

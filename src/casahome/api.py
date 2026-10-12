@@ -127,6 +127,7 @@ from casahome.models.todos import CreateTodoBody
 from casahome.models.visits import VendorVisitDetails, VisitCallsResponse, VisitConversation
 from casahome.models.write_contracts import CreateTodoBody as StrictCreateTodoBody
 from casahome.models.write_contracts import _write_payload
+from casahome.recovered import RecoveredContractsMixin
 from casahome.streaming import CasaAIEvent, _stream_events, _validate_cursor, unverified_stream
 from casahome.workflows import ProvisionalWorkflowMixin
 from casahome.writes import VerifiedWritesMixin
@@ -176,7 +177,9 @@ def _busy_bounds(start: datetime | int, end: datetime | int) -> dict[str, str]:
     return {"start_time": str(start_epoch), "end_time": str(end_epoch)}
 
 
-class CasaApi(VerifiedWritesMixin, ProvisionalWorkflowMixin, ProvisionalMailMixin):
+class CasaApi(
+    VerifiedWritesMixin, ProvisionalWorkflowMixin, ProvisionalMailMixin, RecoveredContractsMixin
+):
     """Typed wrappers around Casa member endpoints.
 
     Live-verified writes come from ``VerifiedWritesMixin`` (``casahome.writes``).
@@ -888,13 +891,17 @@ class CasaApi(VerifiedWritesMixin, ProvisionalWorkflowMixin, ProvisionalMailMixi
         path = f"{_safe_home(home_id)}/availability_requests/{_safe_id(availability_request_id)}"
         return _parse(MemberAvailabilityDetail, await self.client.get(path))
 
-    async def document_details(self, home_id: str, document_id: str) -> DocumentDetailsResponse:
+    async def document_details(
+        self, home_id: str, document_id: str, *, retry_on_401: bool = True
+    ) -> DocumentDetailsResponse:
         """VERIFIED (live GET, 2026-10). ``{"document": {...}}`` populated.
 
         Metadata plus organization and extraction status. No download.
         """
         path = f"{_safe_home(home_id)}/documents/{_safe_id(document_id)}"
-        return _parse(DocumentDetailsResponse, await self.client.get(path))
+        return _parse(
+            DocumentDetailsResponse, await self.client.get(path, retry_on_401=retry_on_401)
+        )
 
     async def document_thumbnail(self, home_id: str, document_id: str) -> DocumentThumbnailResponse:
         """VERIFIED (live GET, 2026-10). Signed preview URLs for one document.
@@ -943,7 +950,7 @@ class CasaApi(VerifiedWritesMixin, ProvisionalWorkflowMixin, ProvisionalMailMixi
         return _parse(DocumentSuggestionsResponse, await self.client.get(path, params=params))
 
     async def document_structure_suggestions(
-        self, home_id: str, document_id: str
+        self, home_id: str, document_id: str, *, retry_on_401: bool = True
     ) -> DocumentStructureSuggestionsResponse:
         """VERIFIED (live GET, 2026-10), populated structure suggestion fields.
 
@@ -952,7 +959,10 @@ class CasaApi(VerifiedWritesMixin, ProvisionalWorkflowMixin, ProvisionalMailMixi
         accepted observed. Reads only, never responds or edits inventory.
         """
         path = f"{_safe_home(home_id)}/documents/{_safe_id(document_id)}/structure_suggestions"
-        return _parse(DocumentStructureSuggestionsResponse, await self.client.get(path))
+        return _parse(
+            DocumentStructureSuggestionsResponse,
+            await self.client.get(path, retry_on_401=retry_on_401),
+        )
 
     async def request_purchases(self, home_id: str, request_id: str) -> ScopedPurchasesResponse:
         """VERIFIED (live GET, 2026-10) envelope for one request's purchases.

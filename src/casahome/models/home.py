@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import Field
+from pydantic import Field, StrictInt
 
 from ._base import CasaModel, epoch_to_dt
 from .enums import WeatherConditionField
@@ -43,7 +43,7 @@ class HomeRoom(CasaModel):
 
 class HomeStory(CasaModel):
     id: str
-    floor_number: int
+    floor_number: StrictInt
     name: str
     window_count: int | None = None
     rooms: list[HomeRoom] = Field(default_factory=list)
