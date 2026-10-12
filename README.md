@@ -1,395 +1,209 @@
 # python-casahome
 
-Async Python client for the [Casa](https://getcasa.com) home membership API.
+An async Python client for the [Casa](https://getcasa.com) member API. This is
+an unofficial library, unaffiliated with Casa. It uses a private API that Casa
+can change without notice.
 
-Unofficial. Not affiliated with or endorsed by Casa.
-
-## Status
-
-Version 0.3.0, alpha. Published on PyPI and GitHub.
-
-- Most reads have been confirmed against live traffic.
-- Version 0.3.0 adds writes whose method, path, request body and response were
-  confirmed against live app traffic: moving inventory, Casa AI messages and
-  ratings, request messages, plain-text to-do creation and deletion, to-do
-  questions and hand-off, name-only entity model publishing, Autopilot,
-  notification and access settings, mailbox claim, and document upload.
-- A few older writes remain unverified. Treat them as experimental.
-- Endpoint shapes were inferred from the iOS app and confirmed against live
-  traffic where marked. Casa can change its private API at any time.
+The current source version is 0.3.1. The package is alpha software. Some calls
+were observed in app traffic, while others were reconstructed from the app and
+have never been checked against Casa's backend. The SDK doesn't cover the full
+app or backend API. See the method docstrings for the evidence and limits of a
+particular call.
 
 ## Install
 
-Install from PyPI:
-
-```
+```sh
 pip install python-casahome
 ```
 
-For this local source checkout:
-
-```
-uv sync --locked
-```
-
-Requires Python 3.11 or newer.
+Python 3.11 or newer is required. To work from a source checkout, use
+`uv sync --locked`.
 
 ## Authentication
 
-Casa signs members in with Firebase phone auth. This library doesn't implement
-phone/SMS sign-in. An independent login flow would need Casa's app-verification
-and callback requirements established first. The supported setup starts from a
-Firebase refresh token and exchanges it for short-lived ID tokens.
+Casa uses Firebase phone authentication. This library starts with a Firebase
+refresh token and exchanges it for short lived ID tokens. It doesn't implement
+phone or SMS sign in. There is no official Casa token export. If you inspect
+your own app session to obtain a token, keep it out of logs and source control.
+Treat it like a password.
 
-Casa offers no official way to export that token. You obtain your own refresh
-token from your own Casa app session, for example by inspecting your own app's
-traffic during login and reading `refreshToken` from the Firebase token
-response.
-
-Treat the refresh token like a password. Anyone holding it can act as you.
-Keep it in a password manager or secret store, never in source control.
-
-The token doesn't expire on a timer, but Firebase can rotate it. Pass
-`on_refresh_token_rotated` to `FirebaseAuth` (sync or async) and persist the new
-value when it fires.
+Firebase can rotate refresh tokens. For a long lived client, construct
+`FirebaseAuth` with `on_refresh_token_rotated` and store the new token when the
+callback runs. The callback can be synchronous or asynchronous. Callback
+failures are logged and don't fail the request, so verify that storage
+succeeded.
 
 ## Quick start
 
 ```python
 import asyncio
 
-from casahome import CasaApi
+import aiohttp
+
+from casahome import CasaApi, CasaClient, FirebaseAuth
 
 
 async def main() -> None:
-    async with CasaApi.create("YOUR_REFRESH_TOKEN") as api:
+    async with aiohttp.ClientSession() as session:
+        auth = FirebaseAuth(
+            session,
+            "YOUR_REFRESH_TOKEN",
+            on_refresh_token_rotated=save_token,
+        )
+        api = CasaApi(
+            CasaClient(session, auth),
+            device_id="YOUR_PERSISTED_DEVICE_ID",
+        )
         me = await api.bootstrap()
         for home in me.homes:
-            print(home.display_address, home.status)
-            weather = await api.weather(home.id)
-            print(weather)
+            print(home.status)
+            print(await api.weather(home.id))
 
 
 asyncio.run(main())
 ```
 
-If you already own an `aiohttp.ClientSession` (for example in Home Assistant),
-build the pieces yourself:
+Define `save_token` to write to your secret store and fail if the write doesn't
+succeed. Replace `YOUR_PERSISTED_DEVICE_ID` with a stable value that you retain
+between runs.
+
+`bootstrap` registers a device. Persist `api.device_id` and pass it as
+`device_id` on later starts. Otherwise each start registers a new device.
+`CasaApi.create` is a convenience for short scripts, but it doesn't install a
+token rotation callback. Use the explicit setup above when the token must
+survive restarts.
+
+If you own an `aiohttp.ClientSession`, you can reuse it:
 
 ```python
 from casahome import CasaApi, CasaClient, FirebaseAuth
 
 auth = FirebaseAuth(session, refresh_token, on_refresh_token_rotated=save_token)
-api = CasaApi(
-    CasaClient(session, auth),
-    device_id=stored_device_id,
-    timezone="America/Los_Angeles",
-)
+api = CasaApi(CasaClient(session, auth), device_id=stored_device_id)
 ```
 
-`bootstrap` registers a device with Casa. Long-lived callers should persist
-`api.device_id` and pass it back on the next start. Otherwise every restart adds
-a new device to the account.
+The caller owns that session and must close it. `CasaApi.create` owns and closes
+its session instead. A runnable bootstrap example is in
+`examples/bootstrap.py`. It doesn't persist a rotated token. Its `--show-token`
+option prints the token to the terminal, so don't use it in captured logs. Set
+`CASA_REFRESH_TOKEN` in your shell to run it:
 
-A runnable example lives in `examples/bootstrap.py`:
-
+```sh
+uv run examples/bootstrap.py
 ```
-CASA_REFRESH_TOKEN=... uv run examples/bootstrap.py
-```
 
-## Coverage
+## API coverage and evidence
 
-Each method's docstring starts with `VERIFIED` or `UNVERIFIED`.
-`casahome.is_unverified(api.some_method)` reports the same thing at runtime.
+Read methods include `home_details`, `inventory_item`, `weather`,
+`credits_summary`, `requests_tab`, `request_details`, `todo_details`,
+`documents`, `document_suggestions`, `autopilot_plans`, `mail_items`,
+`packages` and `calendar`. Some routes were observed with populated items.
+Others were observed only with empty lists, or have untested query variants.
+For example, `document_suggestions` was observed with `view="all"` but other
+filter values aren't confirmed. Several visit and task detail reads remain
+unverified against the backend.
 
-The "Live-confirmed" column means:
+Observed write paths include `move_entity_to_room`, `rename_room`,
+`send_ai_message`, `send_request_message`, `create_todo_result`, `delete_todo`,
+`answer_todo_question`, `update_autopilot_plan`,
+`update_notification_settings`, `update_access_preferences` and
+`upload_document`. An observed path doesn't verify every optional input. For
+example, `save_and_publish_entity` was observed with `model.name` and empty
+`props`. The shared compiled codec supports ID and name selections, but
+model ID traffic hasn't been verified. The SDK doesn't expose clearing make or
+model. The app's compiled clear case encodes JSON null, but backend clearing
+behavior is unknown.
 
-- **yes**: the path, method, response envelope and list item shapes were seen
-  in live traffic.
-- **partial**: the path, method and envelope were seen, but lists came back
-  empty or items are kept as opaque JSON. Item models are inferred.
-- **no**: inferred from the app only. Not seen working live.
+Methods marked `UNVERIFIED` are based on static app reconstruction and local
+synthetic tests, not a successful backend call. They include
+`update_document`, `update_schedule_preferences`, `update_availability_slots`,
+`cancel_vendor_visit`, `update_entity_properties` and the newer
+`update_request_detail`, `dismiss_document_structure_suggestion`,
+`update_task`, `delete_task`, `transfer_task_to_concierge`, `delete_document`,
+`update_room_properties`, `update_story`, `retailer_discounts`,
+`create_support_request` and `mark_vendor_visit_conversation_read`.
+`update_document` is a PATCH method, with unverified date and clearing effects.
+`create_support_request` may contact a person. A message, `ok` or `deleted`
+field in a response must be read as returned. HTTP success alone doesn't
+establish the action's business effect.
 
-The envelope is the top-level response keys. Item shape is the structure of
-elements inside lists. All live confirmation dates from 2026-10.
+Use `casahome.is_unverified(api.update_document)` to check a method's marker.
+Read its docstring for finer distinctions. An unmarked method can still have
+untested variants. Response models live in `casahome.models`. They keep unknown
+fields in `model_extra` and distinguish response envelopes from their nested
+items. A schema mismatch raises `CasaResponseError`.
 
-### Reads
+This SDK is separate from any MCP or Home Assistant adapter. A library method
+doesn't imply that an adapter exposes it. Adapters choose their own limited
+tools and action gates.
 
-| Method | Live-confirmed | Notes |
-|---|---|---|
-| `bootstrap` | yes | Profile, homes, badge counts, app update info. |
-| `onboarding_details` | yes | Raw dict, or `None` on 304. |
-| `onboarding_details_typed` | yes | Typed version of the above. |
-| `onboarding_availability` | yes | |
-| `home_details` | yes | Stories, rooms, inventory entities. |
-| `inventory_item` | yes | One entity. |
-| `inventory_makes` | yes | |
-| `inventory_enums` | yes | Takes a property's `enum_type` key, such as `light_fixture_type`. |
-| `inventory_paint_matches` | yes | |
-| `inventory_service_history` | partial | Room and home targets seen. Entity target untested. |
-| `room_types` | yes | |
-| `room_image_options` | yes | |
-| `room_image_candidates` | yes | |
-| `matterport_images` | yes | |
-| `badge_counts` | yes | |
-| `weather` | yes | |
-| `credits_summary` | yes | |
-| `home_feed` | yes | `props` varies by card template and stays a JSON dict. |
-| `home_members` | yes | |
-| `schedule_preferences` | yes | |
-| `notification_settings` | yes | |
-| `access_preferences` | partial | Option values not seen populated. |
-| `autopilot_plans` | yes | |
-| `paint_brands`, `paint_collections`, `paint_colors`, `paint_search` | yes | |
-| `suggested_todos` | yes | Question rounds and destination stay opaque. |
-| `todo_details` | yes | Question rounds and destination typed. Question items stay JSON. |
-| `document_types` | yes | |
-| `documents` | yes | App sends `limit=30&sort=uploaded`. `q` and `document_type` untested. |
-| `document_details` | yes | |
-| `document_thumbnail` | yes | Signed preview URLs. Never fetched by the library. |
-| `document_file_metadata` | yes | Signed file URL and integer expiry only. No download. |
-| `document_suggestions` | yes | Populated suggestions and citations. `view=all` observed. Other values and filtering semantics unverified. Matches empty, cursor null. |
-| `document_structure_suggestions` | yes | Populated entity/definition IDs, labels, values, response times and citations. |
-| `request_details` | yes | |
-| `request_purchases` | partial | Envelope seen. Item lists empty. |
-| `membership_info` | yes | Active membership. A home without one returns 404. |
-| `help_center_bundle` | yes | Only `member_ios` tested. |
-| `release_notes` | yes | |
-| `release_notes_diff` | yes | |
-| `casa_ai_bootstrap` | partial | Messages not seen populated. |
-| `casa_ai_messages` | partial | |
-| `requests_tab` | yes | Request cards seen populated. Task cards untested. |
-| `completed_requests` | partial | |
-| `calendar` | partial | Bounds sent as epoch seconds. |
-| `calendar_busy` | partial | |
-| `calendar_sync` | partial | |
-| `mailbox`, `mail_items`, `packages` | partial | |
-| `work_document_source` | partial | Only the `todo_id` selector tested. |
-| `vehicles` | partial | |
-| `utilities_insights` | partial | |
-| `purchases` | partial | |
-| `property_taxes` | partial | |
-| `recurring_vendor_categories` | yes | |
-| `recurring_vendors` | partial | |
-| `bookable_handyman_tasks` | partial | Items stay opaque JSON. |
-| `referral_code` | partial | `display` and `referred_homes` stay opaque JSON. |
-| `membership_savings` | no | Returns 404 even with an active membership. |
-| `availability_request_details` | no | |
-| `task_details` | no | |
-| `vendor_visit_details` | no | |
-| `vendor_visit_autopilot_plan` | no | |
-| `vendor_visit_calls` | no | |
-| `vendor_visit_conversation` | no | |
-| `vendor_visit_purchases` | no | |
-| `casa_ai_events` | partial | Opt-in SSE stream. Transport, cursor replay and `message.upsert` updates confirmed. `resync_required` untested. |
+## Write behavior
 
-### Writes
+Each ordinary Casa mutation is sent once. The client force refreshes the ID
+token before sending it and doesn't replay the mutation after a 401. Normal GET
+requests retry once after a 401. `bootstrap` is a deliberate exception: it is a
+POST that registers a device and keeps the one time 401 retry. `upload_document`
+is a multi step workflow with a policy GET and three write steps. Each step is
+attempted once, and its Cloud Storage PUT uses no Casa token. A response parsing
+failure, timeout or connection error after a mutation can leave its outcome
+unknown. Check the resulting state before deciding whether to send another
+request. The `Idempotency-Key` on `send_ai_message` helps trace a send, but
+server deduplication hasn't been verified.
 
-"Yes" means the method, path, request body and response were seen in live app
-traffic and the library sends the same body.
+Write bodies use strict validation. Invalid or unknown input fields raise
+`CasaRequestError` before the write. Optional `None` values generally omit a
+field, while empty strings and lists are sent as supplied. Some contracts send
+explicit null, including the access preference fields. In
+`UpdateDocumentBody`, omitting `document_date` leaves the key out, and
+explicit `document_date=None` sends null. Don't treat those forms as
+interchangeable. The backend effect of document date clearing is unverified.
 
-| Method | Live-confirmed | Notes |
-|---|---|---|
-| `move_entity_to_room` | yes | Replaces the item's room. |
-| `rename_room` | yes | `PATCH` with `room_type_id` and `name`, both always sent. |
-| `save_and_publish_entity`, `update_entity_make_model`, `update_entity_model` | partial | Observed publish subset includes `model.name` and empty `props`. Shared ID/name encoding is statically verified, not traffic verification of every variant. Model-ID traffic remains UNVERIFIED. No clear. |
-| `send_ai_message` | yes | Sends an `Idempotency-Key` and returns it. Reply arrives on the event stream. |
-| `rate_ai_message` | yes | `good` or `bad`. |
-| `answer_todo_question` | yes | Answers seen. The skip body is unverified. |
-| `submit_todo_question_round` | yes | |
-| `respond_to_suggested_todo` | yes | Only `accept` seen. |
-| `materialize_todo`, `send_todo_to_concierge` | yes | Only the `concierge` destination seen. |
-| `create_todo_result`, `create_todo` | yes | Plain text only. Attachments and support-confirmation true unverified. |
-| `delete_todo` | yes | Bodyless DELETE, HTTP 204. |
-| `send_request_message` | yes | Member role and text, HTTP 201 message envelope. Attachments unverified. |
-| `respond_to_document_structure_suggestion` | yes | Only `accepted`. Requires explicit `expected_values`. HTTP 200 with `saved: true`. |
-| `update_autopilot_plan` | yes | |
-| `update_notification_settings` | yes | Only the `push` channel seen. |
-| `update_access_preferences` | yes | All four keys always sent. |
-| `claim_mailbox` | yes | |
-| `create_document_upload_sessions` | yes | Upload step 1. |
-| `upload_document_content` | yes | Upload step 2, to Cloud Storage. |
-| `create_document` | yes | Upload step 3. |
-| `upload_document` | yes | All three steps, after checking the file against `document_types`. |
-| `clear_ai_message_rating` | no | Path from the app only. |
-| `update_entity_properties` | no | |
+Path identifiers must be nonempty safe segments. They aren't normalized to
+UUIDs. Responses can contain home addresses, coordinates, phone numbers, email
+addresses, account identifiers, payment and membership metadata, private
+messages, documents, purchase details and short lived signed URLs. Avoid
+logging complete models, request paths, event payloads or read exceptions.
+Response URLs aren't followed unless a documented workflow requires it.
+`upload_document` follows only its validated Cloud Storage session URL.
 
-### Offline reconstructed contracts
-
-The following SDK methods are **UNVERIFIED against Casa's backend**. Their
-request/response codecs were reconstructed from the compiled app. Synthetic
-loopback tests check serialization and parsing only. No MCP or Home Assistant
-tool is added by these SDK methods.
-
-| Method | Route beneath the home prefix | Result |
-|---|---|---|
-| `update_request_detail` | `PATCH requests/{id}` | Direct six-field `UpdateRequestDetailResponse`. Optional title/read_state (`read` or `unread`) are omitted when absent. |
-| `dismiss_document_structure_suggestion` | `POST documents/{id}/structure_suggestions/{id}/respond` | `SavedResponse`. Requires ordered caller-supplied `expected_values`, even when empty. The existing accepted-only method is unchanged. |
-| `update_task`, `delete_task`, `transfer_task_to_concierge` | `PATCH/DELETE tasks/{id}`, `POST tasks/{id}/transfer_to_concierge` | TaskDetails (scalar edits only), BasicMessageResponse, direct TransferToConciergeResponse. DELETE and transfer have no body. |
-| `delete_document` | `DELETE documents/{id}` | `HomeDocumentDeleteResponse.deleted`. False is retained on HTTP success. |
-| `update_room_properties` | `PATCH room/{id}/props` under the **member** home prefix | Required props list of definition_id plus optional string value. No enum or clear input. |
-| `update_story` | `PATCH story/{id}` under the **member** home prefix | Optional name/floor_number, BasicMessageResponse. |
-| `retailer_discounts` | `GET retailer_discounts` | Required `data` array with typed scalar items and preserved unknown fields. Never follows URLs. |
-| `create_support_request` | `POST support_requests` | Text-only, direct request_id. This may contact a person. No attachments. |
-| `mark_vendor_visit_conversation_read` | `PATCH vendor_visits/{id}/conversation/read` | Bodyless, required `ok` Boolean. False isn't treated as success. |
-
-Writes make a single attempt without 401 replay. A response parse failure after
-a write is an unknown outcome, not proof the write didn't happen. No implicit
-clearing, conflict retry, dispatch, booking or follow-up action is performed.
-Resource refresh needs raw response bytes rather than the current JSON-only
-client transport, so it isn't exposed. Mail detail, utility statements and
-vendor message sends need further nested response proof. Shopping, billing and
-credential operations remain excluded.
-
-## Models
-
-Import models from `casahome.models`. Unknown response fields are kept in
-`model_extra` rather than dropped, so new server fields don't break parsing.
-A response that doesn't match the expected shape raises `CasaResponseError`.
-
-Identifier arguments are checked before any request. They must be nonempty
-path-safe segments (letters, digits, `.`, `_`, `~`, `-`). IDs aren't trimmed,
-lowercased or forced to UUIDs.
-
-Responses can contain personal data: names, contact details, messages,
-documents and purchase info. Avoid logging whole models. URLs in responses are
-returned as data. The library never follows them.
-
-## Writes
-
-Live-confirmed writes are listed in the coverage table above. The remaining
-writes were inferred from the app and haven't been exercised against the live
-backend. Nothing is sent until you await a write method.
-
-- Each write is sent exactly once. There is no retry, including on 401. The ID
-  token is refreshed before the request, and a 401 raises `CasaAuthError`.
-  Deciding whether to repeat is up to you.
-- If the response fails to parse, the server may still have performed the
-  action. Don't assume a parse error means it's safe to repeat.
-- Request bodies are strict Pydantic models. Unknown fields and invalid values
-  raise `CasaRequestError` before any I/O. Free-text fields are capped at
-  10,000 characters.
-- Optional fields set to `None` are omitted from the JSON. Empty strings and
-  empty lists are sent as given.
-- Where the app sends an explicit `null` (for example `other_text` in to-do
-  answers, or the access preference keys), the library sends `null` too.
-- `send_ai_message` is the only write with an `Idempotency-Key`. The returned
-  key supports tracing, but server deduplication hasn't been tested. A failed
-  send may have succeeded. Check the thread before considering another attempt.
-- `send_request_message` only allows the `member` sender role.
-- `create_todo_result` returns the full envelope, including
-  `needs_support_confirmation`. `create_todo` is the older helper that returns
-  just the todo.
-- `save_and_publish_entity` takes a `SaveAndPublishEntityRequest` with
-  optional `make` and `model`, each a `CatalogFieldId(id=...)` or
-  `CatalogFieldName(name=...)`, and `props=[]`. At least one side is required.
-  `update_entity_make_model(home_id, entity_id, *, make_id=, make_name=,
-  model_id=, model_name=)` builds the same body: at most one of id or name per
-  side, at least one side. `update_entity_model(home_id, entity_id, model_name)`
-  is the model-name-only shortcut. All return `SaveAndPublishEntityResponse`,
-  including optional make/model and required identity, entity_id and status.
-  Missing or null make/model fields are accepted based on the compiled decoder,
-  not a claim of observed server responses. Casa matches names against its catalog
-  and may store a different canonical name. An unmatched name raises
-  `CasaApiError` with status 400 and code `CATALOG_MODEL_UNVERIFIED`. Names
-  are capped at 256 characters and can't be blank. Clearing a make or model
-  isn't supported. The compiled clear case encodes explicit null, but its server
-  semantics remain UNVERIFIED. SDK `None` omits a side and never clears it.
-  Model-ID selection has static codec evidence only, not verified traffic.
-  Nonempty props are
-  rejected. The older property PATCH is still unverified.
-- `rename_room(home_id, room_id, *, room_type_id, name)` sends both keys. Pass
-  the room's current `room_type_id` (from `home_details`) to keep its type.
-  Room creation isn't implemented.
-- `CasaApiError` reads `display_title`, `display_message` and `request_id`
-  from either camelCase or snake_case error bodies. Both are seen live.
-- `document_suggestions(..., view=None)` omits the query by default. Supplied
-  view strings are forwarded unchanged as query values. `view="all"` was
-  observed. Other values and filtering semantics aren't verified.
-  A null `next_cursor` was observed,
-  but no cursor input is added without an observed query contract.
-- `respond_to_document_structure_suggestion(home_id, document_id, suggestion_id,
-  expected_values, decision="accepted")` sends only the confirmed response body.
-  `expected_values` is required. Pass the suggestion's `current_values`, including
-  an explicit empty list when appropriate. There isn't a default race guard or
-  automatic refresh. Server mismatch handling remains unverified.
-  `"accept"` and dismissal decisions are rejected. `SavedResponse.saved` requires
-  a strict Boolean. No document PATCH is added.
-
-### Additional reconstructed workflows
-
-These methods are implemented with strict request models, typed responses and
-offline tests. Unless explicitly noted, they remain `UNVERIFIED`. Static client
-code doesn't establish current backend acceptance, business effects or safe retries.
-None is automatically executed or exposed as a live MCP action.
-
-| Methods | Request distinction and remaining uncertainty |
-|---|---|
-| `update_todo` | Optional title, brief, emoji and attachment deltas omit `None`. Clear behavior unknown. |
-| `reject_suggested_todo` | `reject` with optional `dismissed` or `already_handled` reason. |
-| `confirm_todo_support` | Caller-supplied strict Boolean, no inferred classification. |
-| `update_document` | Date omitted, supplied string, or explicit null. Date format and clearing effects unverified. |
-| `analyze_document`, `organize_document` | Analysis requires an explicit `reanalyze` Boolean. Organization has no JSON body. |
-| `update_schedule_preferences` | Both day-number and time-window-ID arrays required. Numbering and replacement rules unknown. |
-| `update_availability_slots` | Required integer windows. Time units and submission semantics unknown. |
-| `reorder_todo_section` | Required revision and ordered IDs. No conflict refetch/retry. |
-| `retry_todo` | Explicit bodyless preparation action, not transport retry. |
-| `cancel_vendor_visit` | Bodyless PUT. Fees and side effects possible, not established. |
-| `add_mailbox_recipient` | VERIFIED for first/last names. Business-name and partial-name variants unverified. |
-| `update_mailbox_auto_archive` | VERIFIED for `30` and explicit null. Other values and disposal effects unverified. |
-| `remove_mailbox_recipient` | Bodyless DELETE. Recipient restrictions and reversibility unknown. |
-| `mark_mail_item_read`, `mark_mail_item_unread`, `set_mail_item_archived` | Bodyless POSTs. Archiving isn't a shredding claim. |
-| `validate_package_tracking_number`, `add_tracked_package` | Validation uses POST. Package direction is explicit. |
-| `update_package`, `requeue_package_pickup` | Update uses POST. `deleted` may remove a record, not merely cancel pickup. |
-| `create_package_pickup_item` | Requires a matching typed image-upload receipt. No multipart-upload helper or time-slot selection. |
-| `set_package_auto_archive` | Required nullable integer. Allowed ranges unknown. |
-| `create_inventory_entity`, `create_inventory_lighting`, `create_paint_from_library` | Capture constructors. No guessed custom make/model tags or lighting-kind values. |
-
-Document-date examples preserve the distinction between unchanged and clearing:
+## Document upload
 
 ```python
-from casahome.models import UpdateDocumentBody
+from pathlib import Path
 
-rename_only = UpdateDocumentBody(name="Warranty")  # No document_date key.
-set_date = UpdateDocumentBody(document_date="2020-01-01")  # Format is unverified.
-clear_date = UpdateDocumentBody(document_date=None)  # Explicit JSON null.
-```
-
-Forwarding, shredding, check deposit, reservation submission and document-suggestion
-dismissal aren't invented from endpoint names or nearby UI text. More evidence is needed.
-
-### Document upload
-
-```python
 result = await api.upload_document(home_id, Path("inspection.pdf"), "inspection.pdf")
 print(result.document.id, result.already_exists)
 ```
 
-`upload_document` reads `document_types` first and rejects files whose MIME
-type isn't allowed or whose size exceeds `max_file_size_bytes`. It then
-reserves an upload session, sends the bytes to the signed Cloud Storage URL
-Casa returns, and registers the document. The bytes go out in one request, so
-the file is held in memory. The storage request carries no Casa credentials and
-is only sent to `https://storage.googleapis.com`. Signed URLs never appear in
-exception messages.
+`upload_document` first reads `document_types` to check MIME type and file
+size. It reserves a session, uploads the bytes to the signed Cloud Storage URL
+Casa returns, then registers the document. `find_todos=True` asks Casa to look
+for suggested tasks. Each step is attempted once. An error in a later step
+doesn't undo an earlier one.
 
-Local paths are opened once and must refer to nonempty regular files. Symlinks
-to regular files are allowed. FIFOs, devices and directories are rejected.
-The actual read is capped at `max_file_size_bytes` plus one detection byte,
-including when the file grows. The client's configured total timeout bounds
-waiting for a file read. Cancellation can't interrupt a filesystem call already
-running in the worker thread, which closes its descriptor when it finishes.
+`source` can be bytes or a local path. The MIME type is guessed from `filename`
+when omitted and must appear in Casa's allowed MIME types. Local paths must
+open as nonempty regular files. Symlinks to regular files are allowed. The read
+is bounded by Casa's reported file size limit, plus one byte for detecting an
+oversized file. The entire file is held in memory for one storage request. The
+client timeout bounds the file read and storage request, but cancellation can't
+stop a filesystem call already running in a worker thread.
 
-Storage uploads use a separate session with no caller Authorization, BasicAuth,
-cookies, custom headers or middleware. Environment proxy/netrc settings aren't
-used. Normal TLS verification stays enabled. The storage session closes on
-success, failure or cancellation. The caller's Casa session stays open.
+The filename must contain 1 to 1,024 characters, include a nonwhitespace
+character and contain no controls. The signed URL can contain at most 8,192
+characters, must contain no embedded credentials and must use HTTPS on
+`storage.googleapis.com` at port 443. A separate storage session sends no Casa
+credentials, caller headers, cookies, environment proxy settings or netrc
+configuration. It doesn't follow redirects and accepts only HTTP 200 or 201.
+Keep signed session URLs private. See the `upload_document` and
+`upload_document_content` docstrings for the complete contract.
 
-## CasaAI event stream
+## Casa AI events
 
-`api.casa_ai_events(home_id, after=None)` is an opt-in async generator over the
-CasaAI server-sent event stream. It doesn't reconnect on its own. Close it with
-`contextlib.aclosing` if you stop early:
+`casa_ai_events` is an opt in server sent event stream. A live connection and
+some update traffic were observed, but the full event and reconnect behavior
+isn't verified. The generator doesn't reconnect automatically. Close it when
+you stop reading early:
 
 ```python
 from contextlib import aclosing
@@ -399,29 +213,30 @@ from casahome.streaming import CasaAIResyncRequiredEvent, CasaAIThreadUpdateEven
 
 async with aclosing(api.casa_ai_events(home_id, after=saved_cursor)) as events:
     async for event in events:
-        saved_cursor = event.id
+        if event.id is not None:
+            saved_cursor = event.id
         if isinstance(event, CasaAIResyncRequiredEvent):
-            break  # Reload state, then subscribe again.
+            break  # Reload state before subscribing again.
         if isinstance(event, CasaAIThreadUpdateEvent):
             for change in event.update().changes:
                 if isinstance(change, CasaAIMessageUpsertChange):
                     print(change.message.sender_role, change.message.content)
 ```
 
-`event.update()` parses the payload. `message.upsert` changes are typed, and
-any other change type parses as `CasaAIUnknownChange` with its fields kept.
-`event.payload` stays available as raw JSON.
-
-Cursors (`event.id`, and `event_cursor` from `casa_ai_bootstrap`) are opaque.
-Store them and pass them back unchanged. Resuming from an earlier cursor
-replays the updates since that point.
-
-Lines are capped at 64 KiB and events at 256 KiB. A 401 refreshes the token and
-retries the GET once.
+An `after` cursor is opaque. Store it unchanged. `event.update()` validates the
+decoded thread update. `event.payload` retains the decoded JSON value, while
+`event.data` retains the original event text. Other change types remain
+available as `CasaAIUnknownChange`. The stream limits lines to 64 KiB, events to
+256 KiB and cursors to 2,048 characters without controls. The cursor is sent as
+both `after` and `Last-Event-ID`. Redirects are disabled. A 60 second socket
+read gap raises a connection error. HTTP 204 ends the generator, and incomplete
+event framing at EOF is discarded. `resync_required` is yielded once before
+the response closes. The GET can refresh an expired token and retry once on
+401. That retry behavior doesn't apply to ordinary mutations.
 
 ## Development
 
-```
+```sh
 uv sync
 uv run --locked pytest -q
 uv run --locked ruff check .
@@ -429,8 +244,8 @@ uv run --locked ruff format --check .
 uv run --locked mypy src tests
 ```
 
-Tests use synthetic data and a loopback test server. They make no live service
-calls and need no credentials.
+Tests use synthetic data and a loopback server. They don't call Casa or need
+credentials.
 
 ## License
 

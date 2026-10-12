@@ -1,6 +1,6 @@
 [project]
 name = "python-casahome"
-version = "0.3.0"
+version = "0.3.1"
 description = "Unofficial async client for the Casa (getcasa.com) member API"
 readme = "README.md"
 license = "MIT"
