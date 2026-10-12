@@ -204,7 +204,20 @@ def test_publish_input_models_strict_and_exported(model: type[BaseModel]) -> Non
         {"model": {"name": "Example"}},
         {"model": {"name": 7}, "props": []},
         {"model": {"name": "Example", "id": "model-test"}, "props": []},
-        {"model": {"name": "Example"}, "make": {"name": "Example"}, "props": []},
+        {"make": {"id": "make-test", "name": "Example"}, "props": []},
+        {"make": {}, "props": []},
+        {"make": None, "model": None, "props": []},
+        {"props": []},
+        {"make": {"clear": True}, "props": []},
+        {"make": "make-test", "props": []},
+        {"model": {"name": ""}, "props": []},
+        {"model": {"name": "   "}, "props": []},
+        {"model": {"name": "a\nb"}, "props": []},
+        {"model": {"name": "x" * 257}, "props": []},
+        {"model": {"id": ""}, "props": []},
+        {"model": {"id": "a/b"}, "props": []},
+        {"model": {"id": "x" * 129}, "props": []},
+        {"model": {"id": 7}, "props": []},
         {"model": {"name": "Example"}, "props": [{"definition_id": "test", "value": "x"}]},
         {"model": {"name": "Example"}, "props": ()},
         {"model": None, "props": []},
@@ -235,6 +248,7 @@ async def test_copied_and_mutated_publish_body_revalidated(
     if mutation == "props":
         body.props.append(UpdateEntityProperty(definition_id="test", value=CANARY))
     elif mutation == "name":
+        assert body.model is not None
         body = body.model_copy(update={"model": body.model.model_copy(update={"name": [CANARY]})})
     else:
         body = body.model_copy(update={"make": CANARY})

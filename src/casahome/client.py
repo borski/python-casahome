@@ -170,15 +170,23 @@ def _api_error(status: int, body: str, *, raw_fallback: bool = True) -> CasaApiE
     except ValueError:
         payload = None
     if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+        # Both key styles are observed live: camelCase on most routes and
+        # snake_case on save_and_publish catalog errors (2026-10).
         err = payload["error"]
         return CasaApiError(
             status,
             str(err.get("code", "unknown")),
-            str(err.get("displayTitle", "")),
-            str(err.get("displayMessage", "")),
-            str(err.get("requestId", "")),
+            _error_field(err, "displayTitle", "display_title"),
+            _error_field(err, "displayMessage", "display_message"),
+            _error_field(err, "requestId", "request_id"),
         )
     if isinstance(payload, dict) and isinstance(payload.get("error"), str):
         # Second observed shape: {"error": "Invalid user device info"}
         return CasaApiError(status, "unknown", display_message=payload["error"])
     return CasaApiError(status, "unknown", display_message=body[:500] if raw_fallback else "")
+
+
+def _error_field(err: dict[str, Any], camel: str, snake: str) -> str:
+    """Return the camelCase key if present, else the snake_case key, else ""."""
+    value = err[camel] if camel in err else err.get(snake, "")
+    return str(value)

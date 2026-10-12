@@ -1,38 +1,106 @@
-"""Narrow inventory publish contract observed in app traffic.
+"""Inventory publish and room rename contracts observed in app traffic (2026-10).
 
-Only a model name with empty props is accepted. Make selection, model IDs,
-editable properties and clear semantics haven't been observed on this route.
+``save_and_publish`` takes an optional make and an optional model, each a
+catalog field selection. The app's ``CatalogFieldSelection`` has three cases:
+existing ``{"id": ...}`` and new ``{"name": ...}`` are VERIFIED for both make
+and model. The clear case's wire form wasn't recovered, so it isn't offered.
+Editable properties remain UNVERIFIED on this route, so ``props`` must be empty.
 """
 
-from pydantic import Field
+from __future__ import annotations
+
+from typing import Annotated, Self
+
+from pydantic import AfterValidator, Field, model_validator
 
 from casahome.models._base import CasaModel
 from casahome.models.home import EntityIdentity, EntityMake, EntityModel
-from casahome.models.write_contracts import UpdateEntityProperty, _WriteModel, _WriteText
+from casahome.models.write_contracts import UpdateEntityProperty, _WriteModel
+
+CATALOG_NAME_MAX_CHARS = 256
+"""SDK cap on make/model names. Not a server limit, which is UNKNOWN."""
+
+CATALOG_ID_MAX_CHARS = 128
+"""SDK cap on catalog IDs. Observed IDs are UUIDs."""
+
+ROOM_NAME_MAX_CHARS = 256
+"""SDK cap on room names. Not a server limit, which is UNKNOWN."""
 
 
-class EntityModelName(_WriteModel):
-    """Observed name-only model input. No make, catalog ID or clear variant."""
+def _visible_text(value: str) -> str:
+    """Reject blank and control-character text without trimming or normalizing.
 
-    name: _WriteText
+    The message never echoes the value.
+    """
+    if not value.strip():
+        raise ValueError("text must not be blank")
+    if any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in value):
+        raise ValueError("text must not contain control characters")
+    return value
+
+
+_CatalogName = Annotated[
+    str, Field(min_length=1, max_length=CATALOG_NAME_MAX_CHARS), AfterValidator(_visible_text)
+]
+_CatalogId = Annotated[
+    str, Field(min_length=1, max_length=CATALOG_ID_MAX_CHARS, pattern=r"^[A-Za-z0-9._~-]+$")
+]
+_RoomName = Annotated[
+    str, Field(min_length=1, max_length=ROOM_NAME_MAX_CHARS), AfterValidator(_visible_text)
+]
+
+
+class CatalogFieldId(_WriteModel):
+    """Existing catalog entry, sent as ``{"id": ...}``. VERIFIED for make and model."""
+
+    id: _CatalogId
+
+
+class CatalogFieldName(_WriteModel):
+    """Free-text name, sent as ``{"name": ...}``. VERIFIED for make and model.
+
+    The server matches names against its catalog and may return a different
+    canonical name. Unknown names fail with HTTP 400 ``CATALOG_MODEL_UNVERIFIED``.
+    The name is sent as given, without trimming.
+    """
+
+    name: _CatalogName
+
+
+class EntityModelName(CatalogFieldName):
+    """Name-only model input kept for existing callers. Same as ``CatalogFieldName``."""
+
+
+CatalogFieldSelection = CatalogFieldId | CatalogFieldName
+"""Exactly one of ``{"id": ...}`` or ``{"name": ...}``. No clear variant."""
 
 
 class SaveAndPublishEntityRequest(_WriteModel):
-    """Only model.name and an explicitly empty props list are supported.
+    """Optional make and model selections with an explicitly empty props list.
 
-    The property codec is static and UNVERIFIED on this route. Nonempty props
-    are rejected rather than expanding the observed contract.
+    ``None`` sides are omitted from the wire body. At least one side is required,
+    since a props-only publish hasn't been observed. The property codec is
+    static and UNVERIFIED on this route, so nonempty props are rejected.
     """
 
-    model: EntityModelName
+    make: CatalogFieldSelection | None = None
+    model: CatalogFieldSelection | None = None
     props: list[UpdateEntityProperty] = Field(max_length=0)
+
+    @model_validator(mode="after")
+    def _require_a_selection(self) -> Self:
+        if self.make is None and self.model is None:
+            raise ValueError("make or model is required")
+        return self
 
 
 class SaveAndPublishEntityResponse(CasaModel):
     """VERIFIED populated response. Status seen as published, identity as verified.
 
-    Existing catalog/identity models preserve unknown response fields. Populated
-    identity candidates and other status values remain UNVERIFIED.
+    Observed identity: ``state="verified"``, null ``unverified_make`` and
+    ``unverified_model``, and empty ``candidates``. Existing catalog/identity
+    models preserve unknown response fields. Populated candidates and other
+    status values remain UNVERIFIED.
     """
 
     entity_id: str
@@ -40,3 +108,10 @@ class SaveAndPublishEntityResponse(CasaModel):
     make: EntityMake
     model: EntityModel
     identity: EntityIdentity
+
+
+class RenameRoomRequest(_WriteModel):
+    """VERIFIED ``PATCH`` room body. Both keys are always sent."""
+
+    room_type_id: _CatalogId
+    name: _RoomName

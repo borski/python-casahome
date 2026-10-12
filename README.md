@@ -192,7 +192,8 @@ traffic and the library sends the same body.
 | Method | Live-confirmed | Notes |
 |---|---|---|
 | `move_entity_to_room` | yes | Replaces the item's room. |
-| `save_and_publish_entity`, `update_entity_model` | yes | Only `model.name` and empty `props`. No make or model-ID variants. |
+| `rename_room` | yes | `PATCH` with `room_type_id` and `name`, both always sent. |
+| `save_and_publish_entity`, `update_entity_make_model`, `update_entity_model` | yes | Make and model each by `{"id"}` or `{"name"}`, empty `props`. Unknown names fail with `CATALOG_MODEL_UNVERIFIED`. No clear. |
 | `send_ai_message` | yes | Sends an `Idempotency-Key` and returns it. Reply arrives on the event stream. |
 | `rate_ai_message` | yes | `good` or `bad`. |
 | `answer_todo_question` | yes | Answers seen. The skip body is unverified. |
@@ -253,13 +254,24 @@ backend. Nothing is sent until you await a write method.
 - `create_todo_result` returns the full envelope, including
   `needs_support_confirmation`. `create_todo` is the older helper that returns
   just the todo.
-- `save_and_publish_entity` requires `SaveAndPublishEntityRequest` with
-  `model=EntityModelName(name=...)` and `props=[]`. The simpler
-  `update_entity_model(home_id, entity_id, model_name)` sends that same body.
-  Both return `SaveAndPublishEntityResponse`, including make, model and identity.
-  Nonempty props, make selection and model-ID inputs aren't supported here.
-  Empty-name and clear semantics remain unverified. The older property PATCH
-  is still unverified.
+- `save_and_publish_entity` takes a `SaveAndPublishEntityRequest` with
+  optional `make` and `model`, each a `CatalogFieldId(id=...)` or
+  `CatalogFieldName(name=...)`, and `props=[]`. At least one side is required.
+  `update_entity_make_model(home_id, entity_id, *, make_id=, make_name=,
+  model_id=, model_name=)` builds the same body: at most one of id or name per
+  side, at least one side. `update_entity_model(home_id, entity_id, model_name)`
+  is the model-name-only shortcut. All return `SaveAndPublishEntityResponse`,
+  including make, model and identity. Casa matches names against its catalog
+  and may store a different canonical name. An unmatched name raises
+  `CasaApiError` with status 400 and code `CATALOG_MODEL_UNVERIFIED`. Names
+  are capped at 256 characters and can't be blank. Clearing a make or model
+  isn't supported because its wire form is unknown. Nonempty props are
+  rejected. The older property PATCH is still unverified.
+- `rename_room(home_id, room_id, *, room_type_id, name)` sends both keys. Pass
+  the room's current `room_type_id` (from `home_details`) to keep its type.
+  Room creation isn't implemented.
+- `CasaApiError` reads `display_title`, `display_message` and `request_id`
+  from either camelCase or snake_case error bodies. Both are seen live.
 - `document_suggestions(..., view=None)` omits the query by default. Supplied
   view strings are forwarded unchanged as query values. `view="all"` was
   observed. Other values and filtering semantics aren't verified.

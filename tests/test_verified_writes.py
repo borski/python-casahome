@@ -201,6 +201,37 @@ CASES = [
         check=lambda r: r.message == "ok",
     ),
     WriteCase(
+        "rename_room",
+        lambda api: api.rename_room(HOME_ID, "room-1", room_type_id="type-1", name="Example room"),
+        "PATCH",
+        f"{MH}/room/room-1",
+        {"room_type_id": "type-1", "name": "Example room"},
+        response={"message": "Room updated"},
+        check=lambda r: r.message == "Room updated",
+    ),
+    WriteCase(
+        "update_entity_make_model",
+        lambda api: api.update_entity_make_model(
+            HOME_ID, "entity-1", make_id="make-1", model_name="Example model"
+        ),
+        "POST",
+        f"{MH}/entity/entity-1/save_and_publish",
+        {"make": {"id": "make-1"}, "model": {"name": "Example model"}, "props": []},
+        response={
+            "entity_id": "entity-1",
+            "status": "published",
+            "make": {"id": "make-1", "name": "Example make"},
+            "model": {"id": "model-1", "name": "Example model"},
+            "identity": {
+                "state": "verified",
+                "unverified_make": None,
+                "unverified_model": None,
+                "candidates": [],
+            },
+        },
+        check=lambda r: r.identity.state == "verified" and r.model.id == "model-1",
+    ),
+    WriteCase(
         "send_ai_message",
         lambda api: api.send_ai_message(
             HOME_ID, "Example question", upload_ids=["upload-1"], idempotency_key="key-1"
@@ -778,6 +809,8 @@ async def test_bad_home_ids_rejected_before_io(
     [
         lambda api: api.move_entity_to_room(HOME_ID, "../x", "room-1"),
         lambda api: api.move_entity_to_room(HOME_ID, "entity-1", "a/b"),
+        lambda api: api.rename_room(HOME_ID, "a/b", room_type_id="type-1", name="Room"),
+        lambda api: api.update_entity_make_model(HOME_ID, "..", model_name="Model"),
         lambda api: api.rate_ai_message(HOME_ID, "a?b", "good"),
         lambda api: api.answer_todo_question(HOME_ID, "t", "r", "q#x", skip=True),
         lambda api: api.submit_todo_question_round(HOME_ID, "t", "..", []),

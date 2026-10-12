@@ -87,7 +87,11 @@ from .documents import (
     WorkDocumentSourceResponse,
 )
 from .entity_publish import (
+    CatalogFieldId,
+    CatalogFieldName,
+    CatalogFieldSelection,
     EntityModelName,
+    RenameRoomRequest,
     SaveAndPublishEntityRequest,
     SaveAndPublishEntityResponse,
 )
@@ -395,6 +399,9 @@ __all__ = [
     "CasaAIThreadUpdate",
     "CasaAIUnknownChange",
     "CasaModel",
+    "CatalogFieldId",
+    "CatalogFieldName",
+    "CatalogFieldSelection",
     "CompletedRequestsResponse",
     "ConfirmTodoSupportRequest",
     "ConsumptionHistory",
@@ -537,6 +544,7 @@ __all__ = [
     "ReleaseNote",
     "ReleaseNoteSection",
     "ReleaseNotesResponse",
+    "RenameRoomRequest",
     "ReorderTodoSectionRequest",
     "ReorderTodoSectionResponse",
     "RequestCard",

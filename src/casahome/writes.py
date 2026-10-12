@@ -36,6 +36,7 @@ from casahome.models.documents import (
     SavedResponse,
 )
 from casahome.models.entity_publish import (
+    RenameRoomRequest,
     SaveAndPublishEntityRequest,
     SaveAndPublishEntityResponse,
 )
@@ -129,14 +130,16 @@ class VerifiedWritesMixin:
     async def save_and_publish_entity(
         self, home_id: str, entity_id: str, body: SaveAndPublishEntityRequest
     ) -> SaveAndPublishEntityResponse:
-        """VERIFIED for model.name and empty props. Save and publish once.
+        """VERIFIED for make/model id-or-name selections and empty props. Sent once.
 
         Observed POST to the member-home entity's ``save_and_publish`` route
-        with ``{"model": {"name": str}, "props": []}``, answered HTTP 200 with
-        entity_id, status="published", make, model and identity.state="verified".
-        Make selection, model-ID variants, nonempty props and empty-name/clear
-        semantics are UNVERIFIED. Nonempty props and extra fields are rejected.
-        No entity refresh or second write is performed.
+        with optional ``make`` and ``model``, each ``{"id": str}`` or
+        ``{"name": str}``, and ``props: []``. Answered HTTP 200 with entity_id,
+        status="published", make, model and identity.state="verified". Names
+        are matched against Casa's catalog. An unmatched name fails with HTTP
+        400 ``CasaApiError`` code ``CATALOG_MODEL_UNVERIFIED``. The clear
+        selection, nonempty props and props-only bodies are UNVERIFIED and
+        rejected. No entity refresh or second write is performed.
         """
         path = f"{_write_home(home_id, member=True)}/entity/{_write_id(entity_id)}/save_and_publish"
         payload = _write_payload(body, SaveAndPublishEntityRequest)
@@ -147,16 +150,69 @@ class VerifiedWritesMixin:
     ) -> SaveAndPublishEntityResponse:
         """VERIFIED name-only model update via save_and_publish, with empty props.
 
-        The supplied name is preserved. Empty-name/clear semantics are UNVERIFIED.
-        No make, catalog ID or editable-property variants are inferred.
+        Same as ``update_entity_make_model(..., model_name=model_name)``. The
+        supplied name is sent as given. Blank names are rejected, since
+        empty-name/clear semantics are UNVERIFIED.
         """
+        return await self.update_entity_make_model(home_id, entity_id, model_name=model_name)
+
+    async def update_entity_make_model(
+        self,
+        home_id: str,
+        entity_id: str,
+        *,
+        make_id: str | None = None,
+        make_name: str | None = None,
+        model_id: str | None = None,
+        model_name: str | None = None,
+    ) -> SaveAndPublishEntityResponse:
+        """VERIFIED (live, 2026-10). Set an item's make and/or model via save_and_publish.
+
+        Pass at most one of ``make_id``/``make_name`` and at most one of
+        ``model_id``/``model_name``, and at least one side overall. An omitted
+        side isn't sent. The body always carries ``props: []``.
+
+        Both the ``{"id": ...}`` and ``{"name": ...}`` variants were observed
+        for make and model, answered HTTP 200 with the published entity and
+        ``identity.state="verified"``. Casa matches names against its catalog
+        and may store a different canonical name, so read the returned
+        ``make.name`` and ``model.name``. A name it can't match raises
+        ``CasaApiError`` with status 400 and code ``CATALOG_MODEL_UNVERIFIED``.
+        Clearing a make or model isn't supported: its wire form is unknown.
+        """
+        body: dict[str, Any] = {"props": []}
+        for side, id_value, name_value in (
+            ("make", make_id, make_name),
+            ("model", model_id, model_name),
+        ):
+            if id_value is not None and name_value is not None:
+                raise CasaRequestError(f"pass at most one of {side}_id and {side}_name")
+            if id_value is not None:
+                body[side] = {"id": id_value}
+            elif name_value is not None:
+                body[side] = {"name": name_value}
+        if "make" not in body and "model" not in body:
+            raise CasaRequestError("pass a make or model id or name")
         path = f"{_write_home(home_id, member=True)}/entity/{_write_id(entity_id)}/save_and_publish"
-        payload = _body(
-            SaveAndPublishEntityRequest,
-            {"model": {"name": model_name}, "props": []},
-            exclude_none=True,
-        )
+        payload = _body(SaveAndPublishEntityRequest, body, exclude_none=True)
         return _parse(SaveAndPublishEntityResponse, await self.client.post(path, json=payload))
+
+    async def rename_room(
+        self, home_id: str, room_id: str, *, room_type_id: str, name: str
+    ) -> BasicMessageResponse:
+        """VERIFIED (live, 2026-10). Rename a room and set its room type.
+
+        Observed ``PATCH /protected/member/home/{home_id}/room/{room_id}`` with
+        ``{"room_type_id": str, "name": str}``, answered HTTP 200
+        ``{"message": "Room updated"}``. Both keys are always sent. Pass the
+        room's current ``room_type_id`` to keep its type. Partial bodies aren't
+        verified, so neither key is optional.
+        """
+        path = f"{_write_home(home_id, member=True)}/room/{_write_id(room_id)}"
+        payload = _body(
+            RenameRoomRequest, {"room_type_id": room_type_id, "name": name}, exclude_none=False
+        )
+        return _parse(BasicMessageResponse, await self.client.patch(path, json=payload))
 
     async def move_entity_to_room(
         self, home_id: str, entity_id: str, room_id: str
