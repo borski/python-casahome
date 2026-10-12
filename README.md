@@ -37,9 +37,10 @@ Requires Python 3.11 or newer.
 
 ## Authentication
 
-Casa signs members in with Firebase phone auth, and SMS sign-in only works from
-the real app. This library starts from a Firebase refresh token instead and
-exchanges it for short-lived ID tokens.
+Casa signs members in with Firebase phone auth. This library doesn't implement
+phone/SMS sign-in. An independent login flow would need Casa's app-verification
+and callback requirements established first. The supported setup starts from a
+Firebase refresh token and exchanges it for short-lived ID tokens.
 
 Casa offers no official way to export that token. You obtain your own refresh
 token from your own Casa app session, for example by inspecting your own app's
@@ -245,8 +246,9 @@ backend. Nothing is sent until you await a write method.
   empty lists are sent as given.
 - Where the app sends an explicit `null` (for example `other_text` in to-do
   answers, or the access preference keys), the library sends `null` too.
-- `send_ai_message` is the only write with an `Idempotency-Key`. Pass the
-  returned key back to resend after a timeout without creating a duplicate.
+- `send_ai_message` is the only write with an `Idempotency-Key`. The returned
+  key supports tracing, but server deduplication hasn't been tested. A failed
+  send may have succeeded. Check the thread before considering another attempt.
 - `send_request_message` only allows the `member` sender role.
 - `create_todo_result` returns the full envelope, including
   `needs_support_confirmation`. `create_todo` is the older helper that returns
@@ -270,6 +272,48 @@ backend. Nothing is sent until you await a write method.
   automatic refresh. Server mismatch handling remains unverified.
   `"accept"` and dismissal decisions are rejected. `SavedResponse.saved` requires
   a strict Boolean. No document PATCH is added.
+
+### Additional reconstructed workflows
+
+These methods are implemented with strict request models, typed responses and
+offline tests. Unless explicitly noted, they remain `UNVERIFIED`. Static client
+code doesn't establish current backend acceptance, business effects or safe retries.
+None is automatically executed or exposed as a live MCP action.
+
+| Methods | Request distinction and remaining uncertainty |
+|---|---|
+| `update_todo` | Optional title, brief, emoji and attachment deltas omit `None`. Clear behavior unknown. |
+| `reject_suggested_todo` | `reject` with optional `dismissed` or `already_handled` reason. |
+| `confirm_todo_support` | Caller-supplied strict Boolean, no inferred classification. |
+| `update_document` | Date omitted, supplied string, or explicit null. Date format and clearing effects unverified. |
+| `analyze_document`, `organize_document` | Analysis requires an explicit `reanalyze` Boolean. Organization has no JSON body. |
+| `update_schedule_preferences` | Both day-number and time-window-ID arrays required. Numbering and replacement rules unknown. |
+| `update_availability_slots` | Required integer windows. Time units and submission semantics unknown. |
+| `reorder_todo_section` | Required revision and ordered IDs. No conflict refetch/retry. |
+| `retry_todo` | Explicit bodyless preparation action, not transport retry. |
+| `cancel_vendor_visit` | Bodyless PUT. Fees and side effects possible, not established. |
+| `add_mailbox_recipient` | VERIFIED for first/last names. Business-name and partial-name variants unverified. |
+| `update_mailbox_auto_archive` | VERIFIED for `30` and explicit null. Other values and disposal effects unverified. |
+| `remove_mailbox_recipient` | Bodyless DELETE. Recipient restrictions and reversibility unknown. |
+| `mark_mail_item_read`, `mark_mail_item_unread`, `set_mail_item_archived` | Bodyless POSTs. Archiving isn't a shredding claim. |
+| `validate_package_tracking_number`, `add_tracked_package` | Validation uses POST. Package direction is explicit. |
+| `update_package`, `requeue_package_pickup` | Update uses POST. `deleted` may remove a record, not merely cancel pickup. |
+| `create_package_pickup_item` | Requires a matching typed image-upload receipt. No multipart-upload helper or time-slot selection. |
+| `set_package_auto_archive` | Required nullable integer. Allowed ranges unknown. |
+| `create_inventory_entity`, `create_inventory_lighting`, `create_paint_from_library` | Capture constructors. No guessed custom make/model tags or lighting-kind values. |
+
+Document-date examples preserve the distinction between unchanged and clearing:
+
+```python
+from casahome.models import UpdateDocumentBody
+
+rename_only = UpdateDocumentBody(name="Warranty")  # No document_date key.
+set_date = UpdateDocumentBody(document_date="2020-01-01")  # Format is unverified.
+clear_date = UpdateDocumentBody(document_date=None)  # Explicit JSON null.
+```
+
+Forwarding, shredding, check deposit, reservation submission and document-suggestion
+dismissal aren't invented from endpoint names or nearby UI text. More evidence is needed.
 
 ### Document upload
 

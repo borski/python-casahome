@@ -38,6 +38,7 @@ from casahome.const import (
     CASA_DEVICE_APP,
     MAX_APP_BUILD,
 )
+from casahome.mail_workflows import ProvisionalMailMixin
 from casahome.models import (
     BasicMessageResponse,
     Bootstrap,
@@ -127,6 +128,7 @@ from casahome.models.visits import VendorVisitDetails, VisitCallsResponse, Visit
 from casahome.models.write_contracts import CreateTodoBody as StrictCreateTodoBody
 from casahome.models.write_contracts import _write_payload
 from casahome.streaming import CasaAIEvent, _stream_events, _validate_cursor, unverified_stream
+from casahome.workflows import ProvisionalWorkflowMixin
 from casahome.writes import VerifiedWritesMixin
 
 __all__ = ["CasaApi", "is_unverified", "unverified"]
@@ -174,10 +176,12 @@ def _busy_bounds(start: datetime | int, end: datetime | int) -> dict[str, str]:
     return {"start_time": str(start_epoch), "end_time": str(end_epoch)}
 
 
-class CasaApi(VerifiedWritesMixin):
+class CasaApi(VerifiedWritesMixin, ProvisionalWorkflowMixin, ProvisionalMailMixin):
     """Typed wrappers around Casa member endpoints.
 
     Live-verified writes come from ``VerifiedWritesMixin`` (``casahome.writes``).
+    Additional reconstructed workflows remain marked UNVERIFIED. Their presence
+    doesn't establish server acceptance or authorize execution.
     Writes execute only when callers explicitly await them and make exactly
     one attempt: the client force-refreshes the ID token first and raises
     ``CasaAuthError`` on HTTP 401 instead of retrying.

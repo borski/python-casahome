@@ -436,4 +436,5 @@ def test_narrow_confidence_caveats() -> None:
     assert 'value "all" were observed' in (CasaApi.document_suggestions.__doc__ or "")
     assert "Other values" in (CasaApi.document_suggestions.__doc__ or "")
     assert is_unverified(CasaApi.update_entity_properties)
-    assert not hasattr(CasaApi, "update_document")
+    # Its encoder is now reconstructed, not confirmed by a live edit.
+    assert is_unverified(CasaApi.update_document)
