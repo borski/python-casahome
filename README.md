@@ -6,8 +6,7 @@ Unofficial. Not affiliated with or endorsed by Casa.
 
 ## Status
 
-Version 0.3.0, alpha.
-This source tree is local and unpublished. The PyPI package can be older.
+Version 0.3.0, alpha. Published on PyPI and GitHub.
 
 - Most reads have been confirmed against live traffic.
 - Version 0.3.0 adds writes whose method, path, request body and response were
